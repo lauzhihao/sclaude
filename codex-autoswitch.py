@@ -79,7 +79,7 @@ def build_parser() -> argparse.ArgumentParser:
     launch.add_argument(
         "--no-import-known",
         action="store_true",
-        help="Do not auto-import current ~/.codex or AI Accounts Hub managed homes.",
+        help="Do not auto-import current ~/.codex/auth.json.",
     )
     launch.add_argument(
         "--no-login",
@@ -106,7 +106,7 @@ def build_parser() -> argparse.ArgumentParser:
     auto.add_argument(
         "--no-import-known",
         action="store_true",
-        help="Do not auto-import current ~/.codex or AI Accounts Hub managed homes.",
+        help="Do not auto-import current ~/.codex/auth.json.",
     )
     auto.add_argument(
         "--no-login",
@@ -137,7 +137,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser(
         "import-known",
-        help="Import ~/.codex/auth.json and common AI Accounts Hub managed homes.",
+        help="Import ~/.codex/auth.json.",
     )
 
     return parser
@@ -357,18 +357,6 @@ def import_known_sources(state_dir: Path, state: dict) -> list[dict]:
             return
 
     maybe_import(Path.home() / ".codex" / "auth.json")
-
-    home = Path.home()
-    candidate_roots = [
-        home / "Library" / "Application Support" / "com.murong.ai-accounts-hub" / "codex" / "managed-codex-homes",
-        home / ".local" / "share" / "com.murong.ai-accounts-hub" / "codex" / "managed-codex-homes",
-    ]
-    for root in candidate_roots:
-        if not root.exists():
-            continue
-        for auth_path in sorted(root.glob("*/auth.json")):
-            maybe_import(auth_path)
-
     return dedupe_imported(imported)
 
 

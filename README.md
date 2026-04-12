@@ -15,6 +15,7 @@ The installer:
 - downloads `codex-autoswitch.py` into `~/.local/share/auto-codex/`
 - creates `~/.local/bin/auto-codex`
 - keeps all runtime state on the local machine
+- only auto-imports `~/.codex/auth.json`
 
 ## Requirements
 
