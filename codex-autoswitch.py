@@ -22,6 +22,7 @@ DEFAULT_USAGE_BASE_URL = "https://chatgpt.com/backend-api"
 DEFAULT_STATE_BASENAME = "auto-codex"
 LEGACY_STATE_BASENAME = "codex-autoswitch"
 DEFAULT_INSTALL_BASE_URL = "https://raw.githubusercontent.com/lauzhihao/auto-codex/main"
+DEFAULT_PROGRAM_NAME = "scodex"
 KNOWN_COMMANDS = {"launch", "auto", "login", "list", "refresh", "update", "import-auth", "import-known"}
 
 
@@ -85,7 +86,7 @@ def normalize_argv(argv: list[str]) -> list[str]:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog=os.environ.get("AUTO_CODEX_PROG", Path(sys.argv[0]).name),
+        prog=os.environ.get("AUTO_CODEX_PROG", DEFAULT_PROGRAM_NAME),
         description="Switch to the Codex account with the highest remaining quota, then launch Codex."
     )
     parser.add_argument(

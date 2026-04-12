@@ -6,7 +6,8 @@ INSTALL_BIN="${HOME}/.local/bin"
 INSTALL_HOME="${HOME}/.local/share/auto-codex"
 SCRIPT_URL="${RAW_BASE}/codex-autoswitch.py"
 SCRIPT_PATH="${INSTALL_HOME}/codex-autoswitch.py"
-WRAPPER_PATH="${INSTALL_BIN}/auto-codex"
+WRAPPER_PATH="${INSTALL_BIN}/scodex"
+LEGACY_WRAPPER_PATH="${INSTALL_BIN}/auto-codex"
 BEGIN_MARKER="# >>> auto-codex >>>"
 END_MARKER="# <<< auto-codex <<<"
 
@@ -139,8 +140,7 @@ render_shell_block() {
   cat <<EOF
 ${BEGIN_MARKER}
 export PATH="\$HOME/.local/bin:\$PATH"
-alias codex="auto-codex"
-alias codex-original='${REAL_CODEX_BIN}'
+alias scodex-original='${REAL_CODEX_BIN}'
 ${END_MARKER}
 EOF
 }
@@ -220,7 +220,7 @@ cat > "${WRAPPER_PATH}" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 export AUTO_CODEX_HOME="${HOME}/.local/share/auto-codex"
-export AUTO_CODEX_PROG="auto-codex"
+export AUTO_CODEX_PROG="scodex"
 export AUTO_CODEX_RAW_BASE="__AUTO_CODEX_RAW_BASE__"
 exec python3 "${AUTO_CODEX_HOME}/codex-autoswitch.py" "$@"
 EOF
@@ -236,6 +236,10 @@ wrapper_path.write_text(text.replace("__AUTO_CODEX_RAW_BASE__", raw_base), encod
 PY
 
 chmod 0755 "${WRAPPER_PATH}"
+
+if [[ -f "${LEGACY_WRAPPER_PATH}" && "${LEGACY_WRAPPER_PATH}" != "${WRAPPER_PATH}" ]]; then
+  rm -f "${LEGACY_WRAPPER_PATH}"
+fi
 
 while IFS= read -r rc_file; do
   [[ -n "${rc_file}" ]] || continue
@@ -259,6 +263,5 @@ fi
 
 echo "Installed to ${WRAPPER_PATH}"
 echo "Added shell aliases in ~/.zshrc and/or ~/.bashrc:"
-echo "  codex -> auto-codex"
-echo "  codex-original -> ${REAL_CODEX_BIN}"
-echo "Open a new shell or source your shell rc file to activate the codex alias."
+echo "  scodex-original -> ${REAL_CODEX_BIN}"
+echo "Use \`scodex\` to start this wrapper. Open a new shell or source your shell rc file if needed."

@@ -16,11 +16,10 @@ If required dependencies are missing, the installer prints environment details a
 The installer:
 
 - downloads `codex-autoswitch.py` into `~/.local/share/auto-codex/`
-- creates `~/.local/bin/auto-codex`
+- creates `~/.local/bin/scodex`
 - imports `~/.codex/auth.json` into `auto-codex` state when it exists
 - refreshes usage cache after import when the usage API is reachable
-- adds or updates a managed `alias codex="auto-codex"` block in `~/.zshrc` and/or `~/.bashrc`
-- adds `alias codex-original="..."` as a direct escape hatch to the real Codex CLI
+- adds or updates a managed `alias scodex-original="..."` block in `~/.zshrc` and/or `~/.bashrc`
 - keeps all runtime state on the local machine
 
 ## Requirements
@@ -33,16 +32,16 @@ The installer:
 ## Usage
 
 ```bash
-codex
-codex update
-codex update --yes
-codex resume --last
-auto-codex list
-codex-original --help
+scodex
+scodex update
+scodex update --yes
+scodex resume --last
+scodex list
+scodex-original --help
 ```
 
-`codex update` updates `auto-codex` itself from the configured install source.
-Use `codex-original` if you need the underlying Codex CLI directly.
+`scodex update` updates `auto-codex` itself from the configured install source.
+Use `scodex-original` if you need the underlying Codex CLI directly.
 
 ## Publish Checklist
 
