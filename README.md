@@ -10,13 +10,16 @@ The repository is intentionally code-only. It does not contain any account pool 
 curl -fsSL https://raw.githubusercontent.com/lauzhihao/auto-codex/main/install.sh | bash
 ```
 
+The installer prints a step-by-step execution plan, waits for a `Y/N` confirmation, and then runs.
+For non-interactive installs, set `AUTO_CODEX_YES=1`.
+
 The installer:
 
 - downloads `codex-autoswitch.py` into `~/.local/share/auto-codex/`
 - creates `~/.local/bin/auto-codex`
 - imports `~/.codex/auth.json` into `auto-codex` state when it exists
 - refreshes usage cache after import when the usage API is reachable
-- adds `alias codex="auto-codex"` to `~/.zshrc` and/or `~/.bashrc`
+- adds or updates a managed `alias codex="auto-codex"` block in `~/.zshrc` and/or `~/.bashrc`
 - adds `alias codex-original="..."` as a direct escape hatch to the real Codex CLI
 - keeps all runtime state on the local machine
 

@@ -7,6 +7,8 @@ INSTALL_HOME="${HOME}/.local/share/auto-codex"
 SCRIPT_URL="${RAW_BASE}/codex-autoswitch.py"
 SCRIPT_PATH="${INSTALL_HOME}/codex-autoswitch.py"
 WRAPPER_PATH="${INSTALL_BIN}/auto-codex"
+BEGIN_MARKER="# >>> auto-codex >>>"
+END_MARKER="# <<< auto-codex <<<"
 
 if [[ "${RAW_BASE}" == *"<your-name>"* || "${RAW_BASE}" == *"<repo>"* ]]; then
   echo "Replace the placeholder GitHub repo in install.sh before publishing, or set AUTO_CODEX_RAW_BASE." >&2
@@ -14,38 +16,127 @@ if [[ "${RAW_BASE}" == *"<your-name>"* || "${RAW_BASE}" == *"<repo>"* ]]; then
 fi
 
 need_cmd() {
-  if ! command -v "$1" >/dev/null 2>&1; then
-    echo "Missing required command: $1" >&2
+  command -v "$1" >/dev/null 2>&1
+}
+
+show_plan() {
+  cat <<EOF
+auto-codex install plan
+
+The script will perform these actions:
+1. Check required commands: bash, curl, python3, codex.
+2. Download:
+   curl -fsSL ${SCRIPT_URL}
+3. Install files:
+   - ${SCRIPT_PATH}
+   - ${WRAPPER_PATH}
+4. Update managed shell config blocks in:
+$(select_rc_files | sed 's/^/   - /')
+5. If ${HOME}/.codex/auth.json exists:
+   - ${WRAPPER_PATH} import-known
+   - ${WRAPPER_PATH} refresh
+
+The script will not modify ${HOME}/.codex/auth.json.
+EOF
+}
+
+show_requirements() {
+  local missing=0
+  local cmd
+  echo "Dependency check:"
+  for cmd in bash curl python3 codex; do
+    if need_cmd "${cmd}"; then
+      printf '  [ok] %s -> %s\n' "${cmd}" "$(command -v "${cmd}")"
+    else
+      printf '  [missing] %s\n' "${cmd}" >&2
+      missing=1
+    fi
+  done
+  if [[ "${missing}" -ne 0 ]]; then
+    echo "Install aborted because required commands are missing." >&2
     exit 1
   fi
 }
 
-need_cmd bash
-need_cmd curl
-need_cmd python3
-need_cmd codex
+confirm_install() {
+  local reply
+  if [[ "${AUTO_CODEX_YES:-}" == "1" || "${AUTO_CODEX_YES:-}" == "true" ]]; then
+    return
+  fi
+  if ! tty -s >/dev/null 2>&1; then
+    echo "Install requires confirmation. Re-run with AUTO_CODEX_YES=1 for non-interactive use." >&2
+    exit 1
+  fi
+  printf 'Proceed with auto-codex install? [y/N] ' > /dev/tty
+  read -r reply < /dev/tty || exit 1
+  case "${reply}" in
+    y|Y|yes|YES)
+      return
+      ;;
+    *)
+      echo "Install cancelled."
+      exit 1
+      ;;
+  esac
+}
 
-REAL_CODEX_BIN="$(command -v codex)"
+REAL_CODEX_BIN=""
 
-append_shell_block() {
+render_shell_block() {
+  cat <<EOF
+${BEGIN_MARKER}
+export PATH="\$HOME/.local/bin:\$PATH"
+alias codex="auto-codex"
+alias codex-original='${REAL_CODEX_BIN}'
+${END_MARKER}
+EOF
+}
+
+upsert_shell_block() {
   local rc_file="$1"
-  local begin_marker="# >>> auto-codex >>>"
-  local end_marker="# <<< auto-codex <<<"
+  local status
 
   mkdir -p "$(dirname "${rc_file}")"
   touch "${rc_file}"
 
-  if grep -Fq "${begin_marker}" "${rc_file}"; then
-    return
-  fi
+  status="$(
+    python3 - "${rc_file}" "${BEGIN_MARKER}" "${END_MARKER}" "$(render_shell_block)" <<'PY'
+from pathlib import Path
+import sys
 
-  {
-    printf '\n%s\n' "${begin_marker}"
-    printf 'export PATH="$HOME/.local/bin:$PATH"\n'
-    printf 'alias codex="auto-codex"\n'
-    printf "alias codex-original='%s'\n" "${REAL_CODEX_BIN}"
-    printf '%s\n' "${end_marker}"
-  } >> "${rc_file}"
+rc_path = Path(sys.argv[1])
+begin = sys.argv[2]
+end = sys.argv[3]
+block = sys.argv[4].rstrip("\n")
+
+text = rc_path.read_text(encoding="utf-8")
+start = text.find(begin)
+if start == -1:
+    if text and not text.endswith("\n"):
+        text += "\n"
+    if text and not text.endswith("\n\n"):
+        text += "\n"
+    text += block + "\n"
+    rc_path.write_text(text, encoding="utf-8")
+    print("added")
+    raise SystemExit(0)
+
+finish = text.find(end, start)
+if finish == -1:
+    raise SystemExit(f"Managed block start found in {rc_path}, but end marker is missing.")
+
+finish += len(end)
+updated = text[:start].rstrip("\n") + "\n" + block + text[finish:]
+if updated.startswith("\n"):
+    updated = updated[1:]
+if updated == text:
+    print("unchanged")
+else:
+    rc_path.write_text(updated, encoding="utf-8")
+    print("updated")
+PY
+  )"
+  printf '  shell config %s: %s\n' "${status}" "${rc_file}"
 }
 
 select_rc_files() {
@@ -59,6 +150,11 @@ select_rc_files() {
     printf '%s\n' "${HOME}/.bashrc"
   fi
 }
+
+show_requirements
+REAL_CODEX_BIN="$(command -v codex)"
+show_plan
+confirm_install
 
 mkdir -p "${INSTALL_BIN}" "${INSTALL_HOME}"
 
@@ -80,7 +176,7 @@ chmod 0755 "${WRAPPER_PATH}"
 
 while IFS= read -r rc_file; do
   [[ -n "${rc_file}" ]] || continue
-  append_shell_block "${rc_file}"
+  upsert_shell_block "${rc_file}"
 done < <(select_rc_files)
 
 if [[ -f "${HOME}/.codex/auth.json" ]]; then
