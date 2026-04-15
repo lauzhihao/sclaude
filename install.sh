@@ -95,7 +95,7 @@ print_install_hint() {
 
 show_plan() {
   cat <<EOF
-auto-codex install plan
+scodex install plan
 
 The script will perform these actions:
 1. Check runtime environment and required commands: bash, curl, python3, codex.
@@ -257,9 +257,9 @@ done < <(select_rc_files)
 
 if [[ -f "${HOME}/.codex/auth.json" ]]; then
   if "${WRAPPER_PATH}" import-known >/dev/null; then
-    echo "Imported ${HOME}/.codex/auth.json into auto-codex."
+    echo "Imported ${HOME}/.codex/auth.json into scodex state."
     if "${WRAPPER_PATH}" refresh >/dev/null; then
-      echo "Refreshed auto-codex usage cache."
+      echo "Refreshed scodex usage cache."
     else
       echo "Imported ${HOME}/.codex/auth.json, but refreshing usage cache failed." >&2
     fi

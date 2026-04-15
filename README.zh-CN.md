@@ -1,8 +1,8 @@
-# auto-codex
+# scodex
 
 [English](./README.md) | [简体中文](./README.zh-CN.md)
 
-`auto-codex` 会选择当前“立刻可用额度”最合适的 Codex 账号，切换 `~/.codex/auth.json`，然后启动或恢复 Codex。
+`scodex` 会选择当前“立刻可用额度”最合适的 Codex 账号，切换 `~/.codex/auth.json`，然后启动或恢复 Codex。
 
 这个仓库只包含代码，不包含账号池数据、额度缓存、本地配置或虚拟环境文件。
 
@@ -50,7 +50,7 @@ curl -fsSL https://raw.githubusercontent.com/lauzhihao/scodex/main/install.sh | 
 | `scodex refresh` | 刷新所有已知账号的实时额度 |
 | `scodex import-auth <path>` | 导入一个 `auth.json` 文件，或包含 `auth.json` 的目录 |
 | `scodex import-known` | 导入 `~/.codex/auth.json`；可选导入 AI Accounts Hub 管理的账号 |
-| `scodex update` | 从配置的安装源更新 `auto-codex` |
+| `scodex update` | 从配置的安装源更新 `scodex` |
 
 ## 支持的参数
 
@@ -149,7 +149,7 @@ scodex resume --last
 scodex exec "fix failing test"
 ```
 
-这也是为什么 `scodex resume --last` 可以工作，尽管 `resume` 并不是 `auto-codex` 自己声明的子命令。
+这也是为什么 `scodex resume --last` 可以工作，尽管 `resume` 并不是 `scodex` 自己声明的子命令。
 
 ## 选号说明
 

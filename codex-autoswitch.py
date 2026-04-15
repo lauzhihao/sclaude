@@ -152,7 +152,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("list", help="List known accounts and cached usage.")
     subparsers.add_parser("refresh", help="Refresh usage for all known accounts.")
-    update = subparsers.add_parser("update", help="Update auto-codex from its install source.")
+    update = subparsers.add_parser("update", help="Update scodex from its install source.")
     update.add_argument(
         "--yes",
         action="store_true",
@@ -555,7 +555,7 @@ def cmd_update(args: argparse.Namespace, state_dir: Path, state: dict) -> int:
         if args.yes:
             env["AUTO_CODEX_YES"] = "1"
 
-        print(f"Updating auto-codex from {install_url}", flush=True)
+        print(f"Updating scodex from {install_url}", flush=True)
         return subprocess.run(["bash", str(installer_path)], env=env).returncode
 
 

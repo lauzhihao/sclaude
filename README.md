@@ -1,8 +1,8 @@
-# auto-codex
+# scodex
 
 [English](./README.md) | [简体中文](./README.zh-CN.md)
 
-`auto-codex` selects the Codex account with the best immediately usable quota, switches `~/.codex/auth.json`, and then launches or resumes Codex.
+`scodex` selects the Codex account with the best immediately usable quota, switches `~/.codex/auth.json`, and then launches or resumes Codex.
 
 The repository is intentionally code-only. It does not contain account pool data, cached usage, local config, or virtualenv files.
 
@@ -50,7 +50,7 @@ Use `scodex` as the default command. Every command below also works with `auto-c
 | `scodex refresh` | Refresh live usage for all known accounts |
 | `scodex import-auth <path>` | Import an `auth.json` file or a home directory containing `auth.json` |
 | `scodex import-known` | Import `~/.codex/auth.json`; optionally import AI Accounts Hub managed homes |
-| `scodex update` | Update `auto-codex` from its configured install source |
+| `scodex update` | Update `scodex` from its configured install source |
 
 ## Supported Options
 
@@ -149,7 +149,7 @@ scodex resume --last
 scodex exec "fix failing test"
 ```
 
-This is why `scodex resume --last` works even though `resume` is not a declared `auto-codex` subcommand.
+This is why `scodex resume --last` works even though `resume` is not a declared `scodex` subcommand.
 
 ## Selection Notes
 
