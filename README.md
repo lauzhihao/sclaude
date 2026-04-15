@@ -14,9 +14,9 @@ curl -fsSL https://raw.githubusercontent.com/lauzhihao/scodex/main/install.sh | 
 
 The installer:
 
-- downloads `codex-autoswitch.py` into `~/.local/share/auto-codex/`
+- downloads `codex-autoswitch.py` into the local state directory
 - creates `~/.local/bin/scodex` as the primary command
-- creates `~/.local/bin/auto-codex` as a compatibility command
+- keeps a legacy `auto-codex` wrapper for compatibility
 - imports `~/.codex/auth.json` into local state when it exists
 - refreshes usage cache after import when the usage API is reachable
 - adds or updates a managed `alias scodex-original="..."` block in `~/.zshrc` and/or `~/.bashrc`
@@ -32,13 +32,13 @@ The installer:
 ## Entrypoints
 
 - `scodex`: primary command
-- `auto-codex`: compatibility command with the same behavior
+- `auto-codex`: legacy compatibility wrapper
 - `scodex-original`: alias to the underlying Codex CLI binary
 - `codex`: the official Codex CLI command, left unchanged by the installer
 
 ## Command Overview
 
-Use `scodex` as the default command. Every command below also works with `auto-codex`.
+Use `scodex` as the default command. The legacy `auto-codex` wrapper is kept only for backward compatibility.
 
 | Command | Purpose |
 | --- | --- |

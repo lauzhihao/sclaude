@@ -14,9 +14,9 @@ curl -fsSL https://raw.githubusercontent.com/lauzhihao/scodex/main/install.sh | 
 
 安装脚本会：
 
-- 下载 `codex-autoswitch.py` 到 `~/.local/share/auto-codex/`
+- 下载 `codex-autoswitch.py` 到本地状态目录
 - 创建 `~/.local/bin/scodex` 作为主命令
-- 创建 `~/.local/bin/auto-codex` 作为兼容命令
+- 保留旧的 `auto-codex` wrapper 作为兼容入口
 - 在存在 `~/.codex/auth.json` 时导入到本地状态
 - 在额度接口可用时刷新使用量缓存
 - 在 `~/.zshrc` 和/或 `~/.bashrc` 中写入或更新托管的 `alias scodex-original="..."` 配置块
@@ -32,13 +32,13 @@ curl -fsSL https://raw.githubusercontent.com/lauzhihao/scodex/main/install.sh | 
 ## 入口命令
 
 - `scodex`：主命令
-- `auto-codex`：兼容命令，行为与 `scodex` 一致
+- `auto-codex`：历史兼容 wrapper
 - `scodex-original`：底层官方 Codex CLI 二进制的别名
 - `codex`：官方 Codex CLI 命令，安装器不会接管
 
 ## 命令总览
 
-默认推荐使用 `scodex`。下面列出的所有命令都可以把前缀替换成 `auto-codex`。
+默认使用 `scodex`。保留 `auto-codex` 只是为了兼容旧习惯，不再作为文档主名。
 
 | 命令 | 作用 |
 | --- | --- |
