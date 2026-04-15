@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-RAW_BASE="${AUTO_CODEX_RAW_BASE:-https://raw.githubusercontent.com/lauzhihao/auto-codex/main}"
+RAW_BASE="${AUTO_CODEX_RAW_BASE:-https://raw.githubusercontent.com/lauzhihao/scodex/main}"
 INSTALL_BIN="${HOME}/.local/bin"
 INSTALL_HOME="${HOME}/.local/share/auto-codex"
 SCRIPT_URL="${RAW_BASE}/codex-autoswitch.py"

@@ -9,7 +9,7 @@
 ## 安装
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lauzhihao/auto-codex/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lauzhihao/scodex/main/install.sh | bash
 ```
 
 安装脚本会：

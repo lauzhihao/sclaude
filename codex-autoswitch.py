@@ -22,7 +22,7 @@ STATE_VERSION = 1
 DEFAULT_USAGE_BASE_URL = "https://chatgpt.com/backend-api"
 DEFAULT_STATE_BASENAME = "auto-codex"
 LEGACY_STATE_BASENAME = "codex-autoswitch"
-DEFAULT_INSTALL_BASE_URL = "https://raw.githubusercontent.com/lauzhihao/auto-codex/main"
+DEFAULT_INSTALL_BASE_URL = "https://raw.githubusercontent.com/lauzhihao/scodex/main"
 DEFAULT_PROGRAM_NAME = "scodex"
 KNOWN_COMMANDS = {"launch", "auto", "login", "list", "refresh", "update", "import-auth", "import-known"}
 

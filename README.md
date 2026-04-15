@@ -9,7 +9,7 @@ The repository is intentionally code-only. It does not contain account pool data
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lauzhihao/auto-codex/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lauzhihao/scodex/main/install.sh | bash
 ```
 
 The installer:
