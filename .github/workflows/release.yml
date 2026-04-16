@@ -8,6 +8,9 @@ on:
 permissions:
   contents: write
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   build:
     strategy:
@@ -32,7 +35,7 @@ jobs:
             bin_name: scodex.exe
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -57,7 +60,7 @@ jobs:
           Copy-Item "target/${{ matrix.target }}/release/${{ matrix.bin_name }}" "dist/${{ matrix.bin_name }}"
           Compress-Archive -Path "dist/${{ matrix.bin_name }}" -DestinationPath "scodex-${{ github.ref_name }}-${{ matrix.target }}.zip"
       - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: scodex-${{ matrix.target }}
           path: scodex-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.archive_ext }}

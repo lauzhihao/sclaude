@@ -74,13 +74,14 @@ resolve_version() {
 }
 
 download_and_install() {
-  local version target asset url tmp_dir archive_path extracted_path
+  local version target asset url tmp_dir cleanup_dir archive_path extracted_path
   version="$1"
   target="$2"
   asset="scodex-${version}-${target}.tar.gz"
   url="https://github.com/${REPO}/releases/download/${version}/${asset}"
   tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/scodex-install.XXXXXX")"
-  trap 'rm -rf "${tmp_dir}"' EXIT
+  cleanup_dir="${tmp_dir}"
+  trap 'rm -rf -- "'"${cleanup_dir}"'"' EXIT
   archive_path="${tmp_dir}/${asset}"
 
   echo "Downloading ${url}"
@@ -147,4 +148,3 @@ download_and_install "${VERSION}" "${TARGET}"
 install_original_wrapper
 post_install_import
 print_next_steps
-
