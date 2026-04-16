@@ -26,6 +26,7 @@ pub struct Cli {
 pub enum Command {
     Launch(LaunchArgs),
     Auto(AutoArgs),
+    Add(AddArgs),
     Login(LoginArgs),
     Use(UseArgs),
     List,
@@ -66,6 +67,12 @@ pub struct AutoArgs {
 
 #[derive(Debug, Args)]
 pub struct LoginArgs {
+    #[arg(long)]
+    pub switch: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct AddArgs {
     #[arg(long)]
     pub switch: bool,
 }
@@ -177,6 +184,17 @@ pub fn run(cli: Cli) -> Result<i32> {
             storage::save_state(&state_dir, &state)?;
             0
         }
+        Command::Add(args) => {
+            let record = adapter.add_account_via_browser(&state_dir, &mut state)?;
+            let usage = adapter.refresh_account_usage(&mut state, &record);
+            println!("{}", ui.added_account(&record.email));
+            if args.switch {
+                adapter.switch_account(&record)?;
+                print_selection(ui.selection_switched(), &record, &usage);
+            }
+            storage::save_state(&state_dir, &state)?;
+            0
+        }
         Command::Use(args) => {
             adapter.import_known_sources(&state_dir, &mut state);
             let Some(record) = adapter.find_account_by_email(&state, &args.email) else {
@@ -195,28 +213,18 @@ pub fn run(cli: Cli) -> Result<i32> {
             0
         }
         Command::List => {
-            if state.accounts.is_empty() {
-                println!("{}", ui.no_accounts());
-                return Ok(1);
-            }
             adapter.refresh_all_accounts(&mut state);
             storage::save_state(&state_dir, &state)?;
             let active = adapter.read_live_identity();
             println!("{}", adapter.render_account_table(&state, active.as_ref()));
-            println!("{}", ui.row_count(state.accounts.len()));
             0
         }
         Command::Refresh => {
-            if state.accounts.is_empty() {
-                println!("{}", ui.no_accounts());
-                return Ok(1);
-            }
             adapter.refresh_all_accounts(&mut state);
             storage::save_state(&state_dir, &state)?;
             let active = adapter.read_live_identity();
-            println!("{}", ui.refreshed_accounts(state.accounts.len()));
             println!("{}", adapter.render_account_table(&state, active.as_ref()));
-            println!("{}", ui.row_count(state.accounts.len()));
+            println!("{}", ui.refreshed_accounts(state.accounts.len()));
             0
         }
         Command::Update(args) => {
@@ -307,6 +315,7 @@ enum HelpTopic {
     Root,
     Launch,
     Auto,
+    Add,
     Login,
     Use,
     List,
@@ -351,6 +360,7 @@ fn command_help_topic(name: &str) -> Option<HelpTopic> {
     match name {
         "launch" => Some(HelpTopic::Launch),
         "auto" => Some(HelpTopic::Auto),
+        "add" => Some(HelpTopic::Add),
         "login" => Some(HelpTopic::Login),
         "use" => Some(HelpTopic::Use),
         "list" => Some(HelpTopic::List),
@@ -389,6 +399,11 @@ fn render_help_en(topic: HelpTopic) -> String {
             writeln!(
                 &mut out,
                 "  auto         Switch to the best account without launching Codex"
+            )
+            .unwrap();
+            writeln!(
+                &mut out,
+                "  add          Open the signup page, then add one account"
             )
             .unwrap();
             writeln!(
@@ -490,6 +505,18 @@ fn render_help_en(topic: HelpTopic) -> String {
             .unwrap();
             writeln!(&mut out, "  -h, --help             Print help").unwrap();
         }
+        HelpTopic::Add => {
+            writeln!(&mut out, "Usage:").unwrap();
+            writeln!(&mut out, "  scodex add [OPTIONS]").unwrap();
+            writeln!(&mut out).unwrap();
+            writeln!(&mut out, "Options:").unwrap();
+            writeln!(
+                &mut out,
+                "      --switch  Switch to the newly added account after signup/login"
+            )
+            .unwrap();
+            writeln!(&mut out, "  -h, --help    Print help").unwrap();
+        }
         HelpTopic::Login => {
             writeln!(&mut out, "Usage:").unwrap();
             writeln!(&mut out, "  scodex login [OPTIONS]").unwrap();
@@ -580,6 +607,7 @@ fn render_help_zh(topic: HelpTopic) -> String {
             )
             .unwrap();
             writeln!(&mut out, "  auto         切换到最佳账号，但不启动 Codex").unwrap();
+            writeln!(&mut out, "  add          打开注册页，然后新增一个账号").unwrap();
             writeln!(&mut out, "  login        通过设备登录新增一个账号").unwrap();
             writeln!(&mut out, "  use          按邮箱直接切换到一个已知账号").unwrap();
             writeln!(&mut out, "  list         显示最新账号额度").unwrap();
@@ -642,6 +670,14 @@ fn render_help_zh(topic: HelpTopic) -> String {
             )
             .unwrap();
             writeln!(&mut out, "  -h, --help             显示帮助").unwrap();
+        }
+        HelpTopic::Add => {
+            writeln!(&mut out, "用法：").unwrap();
+            writeln!(&mut out, "  scodex add [选项]").unwrap();
+            writeln!(&mut out).unwrap();
+            writeln!(&mut out, "选项：").unwrap();
+            writeln!(&mut out, "      --switch  注册/登录完成后切换到新账号").unwrap();
+            writeln!(&mut out, "  -h, --help    显示帮助").unwrap();
         }
         HelpTopic::Login => {
             writeln!(&mut out, "用法：").unwrap();

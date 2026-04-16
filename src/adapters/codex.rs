@@ -45,6 +45,28 @@ impl CliAdapter for CodexAdapter {
 }
 
 impl CodexAdapter {
+    pub fn add_account_via_browser(
+        &self,
+        state_dir: &Path,
+        state: &mut State,
+    ) -> Result<AccountRecord> {
+        const SIGNUP_URL: &str = "https://auth.openai.com/create-account";
+        let ui = ui::messages();
+
+        println!("{}", ui.add_opening_signup());
+        match try_open_signup_page(SIGNUP_URL) {
+            Ok(BrowserOpenOutcome::Opened) => println!("{}", ui.add_opened_signup(SIGNUP_URL)),
+            Ok(BrowserOpenOutcome::NoGui) => {
+                println!("{}", ui.add_no_gui_open_manually(SIGNUP_URL))
+            }
+            Ok(BrowserOpenOutcome::Failed) | Err(_) => {
+                println!("{}", ui.add_browser_open_failed(SIGNUP_URL))
+            }
+        }
+        self.wait_for_enter_after_signup()?;
+        self.run_device_auth_login(state_dir, state)
+    }
+
     pub fn import_auth_path(
         &self,
         state_dir: &Path,
@@ -254,6 +276,7 @@ impl CodexAdapter {
         let ui = ui::messages();
         let mut accounts = state.accounts.iter().collect::<Vec<_>>();
         accounts.sort_by(|left, right| left.email.cmp(&right.email));
+        let mut usable_count = 0usize;
 
         let rows = accounts
             .into_iter()
@@ -263,6 +286,9 @@ impl CodexAdapter {
                     .get(&account.id)
                     .cloned()
                     .unwrap_or_default();
+                if account_is_usable(&usage) {
+                    usable_count += 1;
+                }
                 let plan = account
                     .plan
                     .clone()
@@ -293,6 +319,7 @@ impl CodexAdapter {
             &[
                 "center", "left", "center", "center", "center", "center", "center",
             ],
+            Some(ui.usable_account_summary(usable_count)),
         )
     }
 
@@ -335,6 +362,21 @@ impl CodexAdapter {
         let record = self.import_auth_path(state_dir, state, &tmp_home)?;
         let _ = fs::remove_dir_all(&tmp_home);
         Ok(record)
+    }
+
+    fn wait_for_enter_after_signup(&self) -> Result<()> {
+        let ui = ui::messages();
+        println!("{}", ui.add_finish_signup_then_continue());
+        if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+            return Ok(());
+        }
+        print!("{}", ui.add_waiting_enter());
+        io::stdout().flush().context("failed to flush stdout")?;
+        let mut line = String::new();
+        io::stdin()
+            .read_line(&mut line)
+            .context("failed to read continuation input")?;
+        Ok(())
     }
 
     pub fn launch_codex(&self, extra_args: &[std::ffi::OsString], resume: bool) -> Result<i32> {
@@ -704,6 +746,67 @@ fn npm_global_codex_bin() -> Option<PathBuf> {
     };
 
     candidates.into_iter().find(|path| path.exists())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BrowserOpenOutcome {
+    Opened,
+    NoGui,
+    Failed,
+}
+
+fn try_open_signup_page(url: &str) -> Result<BrowserOpenOutcome> {
+    if requires_gui_hint() && !has_gui_environment() {
+        return Ok(BrowserOpenOutcome::NoGui);
+    }
+
+    let Some((program, args)) = browser_open_command(url) else {
+        return Ok(BrowserOpenOutcome::NoGui);
+    };
+
+    let status = Command::new(program)
+        .args(args)
+        .status()
+        .with_context(|| format!("failed to open browser for {url}"))?;
+    if status.success() {
+        Ok(BrowserOpenOutcome::Opened)
+    } else {
+        Ok(BrowserOpenOutcome::Failed)
+    }
+}
+
+fn requires_gui_hint() -> bool {
+    !(cfg!(target_os = "windows") || cfg!(target_os = "macos"))
+}
+
+fn has_gui_environment() -> bool {
+    if cfg!(target_os = "windows") || cfg!(target_os = "macos") {
+        return true;
+    }
+
+    env::var_os("DISPLAY").is_some()
+        || env::var_os("WAYLAND_DISPLAY").is_some()
+        || env::var_os("MIR_SOCKET").is_some()
+}
+
+fn browser_open_command(url: &str) -> Option<(&'static str, Vec<String>)> {
+    if cfg!(target_os = "macos") {
+        return Some(("open", vec![url.to_string()]));
+    }
+    if cfg!(target_os = "windows") {
+        return Some((
+            "cmd",
+            vec!["/C".into(), "start".into(), "".into(), url.to_string()],
+        ));
+    }
+
+    if find_in_path("xdg-open").is_some() {
+        Some(("xdg-open", vec![url.to_string()]))
+    } else if find_in_path("gio").is_some() {
+        Some(("gio", vec!["open".into(), url.to_string()]))
+    } else {
+        None
+    }
 }
 
 fn find_in_path(binary: &str) -> Option<PathBuf> {
@@ -1154,6 +1257,10 @@ fn format_account_status(usage: &UsageSnapshot) -> String {
     }
 }
 
+fn account_is_usable(usage: &UsageSnapshot) -> bool {
+    !usage.needs_relogin && usage.last_sync_error.is_none()
+}
+
 fn active_account_marker() -> String {
     "✓".into()
 }
@@ -1171,7 +1278,12 @@ fn detect_local_ip() -> String {
     "127.0.0.1".into()
 }
 
-fn render_table(headers: &[&str], rows: &[Vec<String>], aligns: &[&str]) -> String {
+fn render_table(
+    headers: &[&str],
+    rows: &[Vec<String>],
+    aligns: &[&str],
+    summary: Option<String>,
+) -> String {
     let widths = headers
         .iter()
         .enumerate()
@@ -1209,8 +1321,17 @@ fn render_table(headers: &[&str], rows: &[Vec<String>], aligns: &[&str]) -> Stri
         render_row(headers.iter().map(|item| (*item).to_string()).collect()),
         render_border('├', '┼', '┤'),
     ];
-    for row in rows {
+    for (index, row) in rows.iter().enumerate() {
         lines.push(render_row(row.clone()));
+        if index + 1 != rows.len() {
+            lines.push(render_border('├', '┼', '┤'));
+        }
+    }
+    if let Some(summary) = summary {
+        let total_width = widths.iter().sum::<usize>() + (widths.len() - 1) * 3;
+        let summary = align_cell(summary, total_width, "center");
+        lines.push(format!("├{}┤", "─".repeat(total_width + 2)));
+        lines.push(format!("│ {} │", summary));
     }
     lines.push(render_border('└', '┴', '┘'));
     lines.join("\n")
@@ -1487,10 +1608,19 @@ mod tests {
             &["A", "B"],
             &[vec!["1".into(), "2".into()]],
             &["left", "left"],
+            Some("1 usable account(s)".into()),
         );
         assert!(rendered.contains('┌'));
         assert!(rendered.contains('┬'));
         assert!(rendered.contains('└'));
         assert!(rendered.contains('│'));
+    }
+
+    #[test]
+    fn table_can_render_summary_without_rows() {
+        let rendered = render_table(&["A", "B"], &[], &["left", "left"], Some("0 usable".into()));
+        assert!(rendered.contains("0 usable"));
+        assert!(rendered.contains('┌'));
+        assert!(rendered.contains('└'));
     }
 }

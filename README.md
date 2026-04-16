@@ -66,6 +66,7 @@ Use `scodex` as the default command. The legacy `auto-codex` wrapper is kept onl
 | `scodex` | Refresh usage, keep the current account when its 5h quota is at least 20%, otherwise switch to the best account, then launch or resume Codex |
 | `scodex launch` | Explicit form of the default behavior |
 | `scodex auto` | Refresh usage, keep the current account when its 5h quota is at least 20%, otherwise switch to the best account, without launching Codex |
+| `scodex add` | Open the OpenAI signup page when possible, then add one account through device auth |
 | `scodex login` | Add one account via `codex login --device-auth` |
 | `scodex use <email>` | Switch directly to a known account by email |
 | `scodex list` | Refresh live usage, then show the latest account quotas |
@@ -111,6 +112,17 @@ scodex login [--switch]
 ```
 
 - `--switch`: switch to the newly added account after login
+
+### `add`
+
+```bash
+scodex add [--switch]
+```
+
+- tries to open `https://auth.openai.com/create-account` in the default browser
+- if no GUI is available, prints the signup URL and continues in guided mode
+- after signup or login, continues with `codex login --device-auth`
+- `--switch`: switch to the newly added account after signup/login
 
 ### `use`
 

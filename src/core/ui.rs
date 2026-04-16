@@ -85,14 +85,6 @@ impl Messages {
         }
     }
 
-    pub fn no_accounts(&self) -> &'static str {
-        if self.is_zh() {
-            "没有账号。"
-        } else {
-            "No accounts."
-        }
-    }
-
     pub fn no_importable_accounts(&self) -> &'static str {
         if self.is_zh() {
             "没有找到可导入的账号。"
@@ -125,11 +117,11 @@ impl Messages {
         }
     }
 
-    pub fn row_count(&self, count: usize) -> String {
+    pub fn usable_account_summary(&self, count: usize) -> String {
         if self.is_zh() {
-            format!("共 {count} 行。")
+            format!("共有 {count} 个可用账号")
         } else {
-            format!("{count} row(s) in set.")
+            format!("{count} usable account(s)")
         }
     }
 
@@ -340,6 +332,56 @@ impl Messages {
             "登录流程已结束，但没有生成 auth.json。"
         } else {
             "Login finished but no auth.json was produced."
+        }
+    }
+
+    pub fn add_opening_signup(&self) -> &'static str {
+        if self.is_zh() {
+            "正在打开 OpenAI 账号注册页。"
+        } else {
+            "Opening the OpenAI account signup page."
+        }
+    }
+
+    pub fn add_opened_signup(&self, url: &str) -> String {
+        if self.is_zh() {
+            format!("已尝试打开：{url}")
+        } else {
+            format!("Opened: {url}")
+        }
+    }
+
+    pub fn add_no_gui_open_manually(&self, url: &str) -> String {
+        if self.is_zh() {
+            format!("未检测到可用图形界面。请在另一台可用浏览器的设备上打开：{url}")
+        } else {
+            format!(
+                "No GUI environment detected. Open this URL on another browser-enabled device: {url}"
+            )
+        }
+    }
+
+    pub fn add_browser_open_failed(&self, url: &str) -> String {
+        if self.is_zh() {
+            format!("未能自动打开浏览器。请手动访问：{url}")
+        } else {
+            format!("Could not open a browser automatically. Please visit: {url}")
+        }
+    }
+
+    pub fn add_finish_signup_then_continue(&self) -> &'static str {
+        if self.is_zh() {
+            "完成注册或登录后，按回车继续。"
+        } else {
+            "After you finish signup or login, press Enter to continue."
+        }
+    }
+
+    pub fn add_waiting_enter(&self) -> &'static str {
+        if self.is_zh() {
+            "按回车继续："
+        } else {
+            "Press Enter to continue: "
         }
     }
 }

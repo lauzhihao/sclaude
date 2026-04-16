@@ -66,6 +66,7 @@ cargo build --release
 | `scodex` | 刷新额度；如果当前账号的 5h 剩余额度至少还有 20% 就继续使用它，否则切换到最佳账号，然后启动或恢复 Codex |
 | `scodex launch` | 默认行为的显式写法 |
 | `scodex auto` | 刷新额度；如果当前账号的 5h 剩余额度至少还有 20% 就继续使用它，否则切换到最佳账号，但不启动 Codex |
+| `scodex add` | 尽量自动打开 OpenAI 注册页，然后通过设备登录添加一个账号 |
 | `scodex login` | 通过 `codex login --device-auth` 添加一个账号 |
 | `scodex use <email>` | 按邮箱直接切换到一个已知账号 |
 | `scodex list` | 先刷新实时额度，再显示最新账号额度 |
@@ -111,6 +112,17 @@ scodex login [--switch]
 ```
 
 - `--switch`：登录完成后立即切换到新账号
+
+### `add`
+
+```bash
+scodex add [--switch]
+```
+
+- 会尽量在默认浏览器中打开 `https://auth.openai.com/create-account`
+- 如果当前环境没有可用图形界面，就会打印注册链接并进入引导模式
+- 注册或登录完成后，会继续执行 `codex login --device-auth`
+- `--switch`：注册/登录完成后立即切换到新账号
 
 ### `use`
 
