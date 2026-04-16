@@ -39,9 +39,10 @@ The installer:
 
 ## Requirements
 
-- `codex`
 - Unix installer: `bash`, `curl`, `tar`
 - Windows installer: PowerShell 5+ or PowerShell 7+
+- `codex` is still required at runtime for `launch`, `login`, and passthrough commands
+- when `codex` is missing, `scodex` prompts to install the official CLI with `npm install -g @openai/codex`
 
 Build from source:
 

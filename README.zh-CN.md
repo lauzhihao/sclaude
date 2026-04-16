@@ -39,9 +39,10 @@ irm https://raw.githubusercontent.com/lauzhihao/scodex/main/install.ps1 | iex
 
 ## 依赖
 
-- `codex`
 - Unix 安装器：`bash`、`curl`、`tar`
 - Windows 安装器：PowerShell 5+ 或 PowerShell 7+
+- `codex` 仍然是 `launch`、`login` 和透传命令的运行时依赖
+- 当缺少 `codex` 时，`scodex` 会提示是否执行官方安装命令 `npm install -g @openai/codex`
 
 源码构建：
 

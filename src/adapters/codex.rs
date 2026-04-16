@@ -1,5 +1,6 @@
 use std::env;
 use std::fs;
+use std::io::{self, IsTerminal, Write};
 use std::net::UdpSocket;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -13,12 +14,14 @@ use reqwest::StatusCode;
 use reqwest::blocking::Client;
 use reqwest::header::{ACCEPT, AUTHORIZATION, HeaderMap, HeaderValue, USER_AGENT};
 use serde_json::Value;
+use unicode_width::UnicodeWidthStr;
 use uuid::Uuid;
 
 use crate::adapters::{AdapterCapabilities, CliAdapter};
 use crate::core::policy::{choose_best_account, choose_current_account};
 use crate::core::state::{AccountRecord, LiveIdentity, State, UsageSnapshot};
 use crate::core::storage;
+use crate::core::ui;
 
 #[derive(Debug, Default)]
 pub struct CodexAdapter;
@@ -248,6 +251,7 @@ impl CodexAdapter {
     }
 
     pub fn render_account_table(&self, state: &State, active: Option<&LiveIdentity>) -> String {
+        let ui = ui::messages();
         let mut accounts = state.accounts.iter().collect::<Vec<_>>();
         accounts.sort_by(|left, right| left.email.cmp(&right.email));
 
@@ -263,7 +267,7 @@ impl CodexAdapter {
                     .plan
                     .clone()
                     .or(usage.plan.clone())
-                    .unwrap_or_else(|| "Unknown".into());
+                    .unwrap_or_else(|| ui.unknown().into());
                 vec![
                     if active.is_some_and(|live| {
                         account.email.eq_ignore_ascii_case(&live.email)
@@ -275,18 +279,16 @@ impl CodexAdapter {
                     },
                     account.email.clone(),
                     plan,
-                    format_percent(usage.five_hour_remaining_percent),
-                    format_percent(usage.weekly_remaining_percent),
+                    format_quota_percent(usage.five_hour_remaining_percent),
+                    format_quota_percent(usage.weekly_remaining_percent),
                     format_reset_on(usage.weekly_refresh_at.as_deref()),
                     format_account_status(&usage),
                 ]
             })
             .collect::<Vec<_>>();
 
-        render_ascii_table(
-            &[
-                "Active", "Email", "Plan", "5h", "Weekly", "ResetOn", "Status",
-            ],
+        render_table(
+            &ui.table_headers(),
             &rows,
             &[
                 "center", "left", "center", "center", "center", "center", "center",
@@ -299,6 +301,7 @@ impl CodexAdapter {
         state_dir: &Path,
         state: &mut State,
     ) -> Result<AccountRecord> {
+        let ui = ui::messages();
         let codex_bin = self.resolve_codex_bin()?;
         let temp_root = state_dir.join(".tmp");
         fs::create_dir_all(&temp_root)
@@ -307,9 +310,9 @@ impl CodexAdapter {
         fs::create_dir_all(&tmp_home)
             .with_context(|| format!("failed to create {}", tmp_home.display()))?;
 
-        println!("Starting `codex login --device-auth`.");
-        println!("Open the printed URL on any browser-enabled machine and finish the login there.");
-        println!("Headless host LAN IP: {}", detect_local_ip());
+        println!("{}", ui.login_start());
+        println!("{}", ui.login_open_url());
+        println!("{}", ui.login_headless_ip(&detect_local_ip()));
         println!();
 
         let status = Command::new(&codex_bin)
@@ -320,16 +323,13 @@ impl CodexAdapter {
             .with_context(|| format!("failed to execute {}", codex_bin.display()))?;
         if !status.success() {
             let _ = fs::remove_dir_all(&tmp_home);
-            bail!(
-                "codex login failed with status {}",
-                status.code().unwrap_or(1)
-            );
+            bail!("{}", ui.codex_login_failed(status.code().unwrap_or(1)));
         }
 
         let auth_path = tmp_home.join("auth.json");
         if !auth_path.exists() {
             let _ = fs::remove_dir_all(&tmp_home);
-            bail!("Login finished but no auth.json was produced.");
+            bail!("{}", ui.login_missing_auth());
         }
 
         let record = self.import_auth_path(state_dir, state, &tmp_home)?;
@@ -338,6 +338,7 @@ impl CodexAdapter {
     }
 
     pub fn launch_codex(&self, extra_args: &[std::ffi::OsString], resume: bool) -> Result<i32> {
+        let ui = ui::messages();
         let codex_bin = self.resolve_codex_bin()?;
         let fresh_cmd = build_codex_launch_command(&codex_bin, extra_args, false);
         if resume
@@ -346,7 +347,7 @@ impl CodexAdapter {
             )
         {
             let resume_cmd = build_codex_launch_command(&codex_bin, extra_args, true);
-            println!("Resuming latest Codex session for this directory.");
+            println!("{}", ui.resume_session());
             let status = Command::new(&resume_cmd[0])
                 .args(&resume_cmd[1..])
                 .status()
@@ -354,9 +355,9 @@ impl CodexAdapter {
             if status.success() {
                 return Ok(status.code().unwrap_or(0));
             }
-            eprintln!("Resume did not complete cleanly; falling back to a fresh Codex session.");
+            eprintln!("{}", ui.resume_fallback());
         } else {
-            println!("Starting a fresh Codex session.");
+            println!("{}", ui.fresh_session());
         }
 
         let status = Command::new(&fresh_cmd[0])
@@ -376,25 +377,62 @@ impl CodexAdapter {
     }
 
     pub fn resolve_codex_bin(&self) -> Result<PathBuf> {
-        if let Some(env) = env::var_os("CODEX_BIN") {
-            let path = PathBuf::from(env);
-            if path.exists() {
-                return Ok(path);
-            }
-        }
-
-        if let Some(path) = find_in_path("codex") {
+        if let Some(path) = find_codex_bin() {
             return Ok(path);
         }
 
-        if let Some(home) = env::var_os("HOME") {
-            let path = PathBuf::from(home).join(".local").join("bin").join("codex");
-            if path.exists() {
-                return Ok(path);
-            }
+        self.offer_to_install_codex()?;
+        find_codex_bin()
+            .ok_or_else(|| anyhow::anyhow!(ui::messages().codex_install_still_missing()))
+    }
+
+    fn offer_to_install_codex(&self) -> Result<()> {
+        let install = codex_install_command();
+        let install_line = install.display();
+        let ui = ui::messages();
+
+        eprintln!("{}", ui.missing_codex());
+        eprintln!("{}", ui.install_hint());
+        eprintln!();
+        eprintln!("{install_line}");
+        eprintln!();
+
+        if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+            eprintln!("{}", ui.manual_install());
+            std::process::exit(1);
         }
 
-        bail!("Unable to find `codex`. Set CODEX_BIN or install Codex CLI first.")
+        loop {
+            print!("{}", ui.confirm_install());
+            io::stdout().flush().context("failed to flush stdout")?;
+
+            let mut answer = String::new();
+            io::stdin()
+                .read_line(&mut answer)
+                .context("failed to read confirmation input")?;
+
+            match parse_yes_no(&answer) {
+                Some(true) => {
+                    let status = Command::new(&install.program)
+                        .args(&install.args)
+                        .status()
+                        .with_context(|| format!("failed to execute `{install_line}`"))?;
+                    if !status.success() {
+                        bail!("{}", ui.codex_install_failed(status.code().unwrap_or(1)));
+                    }
+                    return Ok(());
+                }
+                Some(false) => {
+                    eprintln!("{}", ui.manual_install());
+                    eprintln!();
+                    eprintln!("{install_line}");
+                    std::process::exit(1);
+                }
+                None => {
+                    eprintln!("{}", ui.invalid_yes_no());
+                }
+            }
+        }
     }
 
     fn has_resumable_session(&self, cwd: &Path) -> bool {
@@ -562,6 +600,112 @@ fn codex_home() -> PathBuf {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct InstallCommand {
+    program: String,
+    args: Vec<String>,
+}
+
+impl InstallCommand {
+    fn display(&self) -> String {
+        std::iter::once(self.program.as_str())
+            .chain(self.args.iter().map(String::as_str))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+}
+
+fn codex_install_command() -> InstallCommand {
+    InstallCommand {
+        program: npm_command_name().to_string(),
+        args: vec!["install".into(), "-g".into(), "@openai/codex".into()],
+    }
+}
+
+fn npm_command_name() -> &'static str {
+    if cfg!(windows) { "npm.cmd" } else { "npm" }
+}
+
+fn find_codex_bin() -> Option<PathBuf> {
+    if let Some(env) = env::var_os("CODEX_BIN") {
+        let path = PathBuf::from(env);
+        if path.exists() {
+            return Some(path);
+        }
+    }
+
+    for candidate in codex_binary_names() {
+        if let Some(path) = find_in_path(candidate) {
+            return Some(path);
+        }
+    }
+
+    if let Some(home) = env::var_os("HOME") {
+        let home = PathBuf::from(home);
+        for candidate in codex_home_binary_candidates(&home) {
+            if candidate.exists() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    npm_global_codex_bin()
+}
+
+fn codex_binary_names() -> &'static [&'static str] {
+    if cfg!(windows) {
+        &["codex.cmd", "codex.exe", "codex.bat", "codex"]
+    } else {
+        &["codex"]
+    }
+}
+
+fn codex_home_binary_candidates(home: &Path) -> Vec<PathBuf> {
+    if cfg!(windows) {
+        vec![
+            home.join("AppData")
+                .join("Roaming")
+                .join("npm")
+                .join("codex.cmd"),
+            home.join("AppData")
+                .join("Roaming")
+                .join("npm")
+                .join("codex.exe"),
+        ]
+    } else {
+        vec![home.join(".local").join("bin").join("codex")]
+    }
+}
+
+fn npm_global_codex_bin() -> Option<PathBuf> {
+    let npm = if cfg!(windows) {
+        find_in_path("npm.cmd")
+            .or_else(|| find_in_path("npm.exe"))
+            .or_else(|| find_in_path("npm"))
+    } else {
+        find_in_path("npm")
+    }?;
+
+    let output = Command::new(npm).args(["prefix", "-g"]).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let prefix = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if prefix.is_empty() {
+        return None;
+    }
+
+    let prefix = PathBuf::from(prefix);
+    let candidates = if cfg!(windows) {
+        vec![prefix.join("codex.cmd"), prefix.join("codex.exe")]
+    } else {
+        vec![prefix.join("bin").join("codex")]
+    };
+
+    candidates.into_iter().find(|path| path.exists())
+}
+
 fn find_in_path(binary: &str) -> Option<PathBuf> {
     let path_var = env::var_os("PATH")?;
     for dir in env::split_paths(&path_var) {
@@ -571,6 +715,14 @@ fn find_in_path(binary: &str) -> Option<PathBuf> {
         }
     }
     None
+}
+
+fn parse_yes_no(value: &str) -> Option<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "y" | "yes" => Some(true),
+        "n" | "no" => Some(false),
+        _ => None,
+    }
 }
 
 fn build_codex_launch_command(
@@ -947,20 +1099,32 @@ fn value_to_string(value: &Value) -> String {
 }
 
 fn format_percent(value: Option<i64>) -> String {
+    let ui = ui::messages();
     value
         .map(|value| format!("{value}%"))
-        .unwrap_or_else(|| "N/A".into())
+        .unwrap_or_else(|| ui.na().into())
+}
+
+fn format_quota_percent(value: Option<i64>) -> String {
+    let text = format_percent(value);
+    match value {
+        Some(value) if value < 20 => style_text(&text, AnsiStyle::Red),
+        Some(value) if value < 50 => style_text(&text, AnsiStyle::Yellow),
+        Some(_) => style_text(&text, AnsiStyle::Green),
+        None => text,
+    }
 }
 
 fn format_reset_on(value: Option<&str>) -> String {
+    let ui = ui::messages();
     let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
-        return "N/A".into();
+        return ui.na().into();
     };
     if value.eq_ignore_ascii_case("none")
         || value.eq_ignore_ascii_case("null")
         || value.eq_ignore_ascii_case("n/a")
     {
-        return "N/A".into();
+        return ui.na().into();
     }
     if let Ok(timestamp) = value.parse::<i64>() {
         if let Some(parsed) = DateTime::<Utc>::from_timestamp(timestamp, 0) {
@@ -976,16 +1140,17 @@ fn format_reset_on(value: Option<&str>) -> String {
             .format("%m-%d %H:%M")
             .to_string();
     }
-    "N/A".into()
+    ui.na().into()
 }
 
 fn format_account_status(usage: &UsageSnapshot) -> String {
+    let ui = ui::messages();
     if usage.needs_relogin {
-        "RELOGIN".into()
+        style_text(ui.status_relogin(), AnsiStyle::Red)
     } else if usage.last_sync_error.is_some() {
-        "ERROR".into()
+        style_text(ui.status_error(), AnsiStyle::Red)
     } else {
-        "OK".into()
+        style_text(ui.status_ok(), AnsiStyle::Green)
     }
 }
 
@@ -1006,24 +1171,29 @@ fn detect_local_ip() -> String {
     "127.0.0.1".into()
 }
 
-fn render_ascii_table(headers: &[&str], rows: &[Vec<String>], aligns: &[&str]) -> String {
+fn render_table(headers: &[&str], rows: &[Vec<String>], aligns: &[&str]) -> String {
     let widths = headers
         .iter()
         .enumerate()
         .map(|(index, header)| {
             rows.iter()
-                .map(|row| row.get(index).map_or(0, String::len))
-                .fold(header.len(), usize::max)
+                .map(|row| row.get(index).map_or(0, |value| visible_width(value)))
+                .fold(visible_width(header), usize::max)
         })
         .collect::<Vec<_>>();
-    let border = format!(
-        "+{}+",
-        widths
-            .iter()
-            .map(|width| "-".repeat(width + 2))
-            .collect::<Vec<_>>()
-            .join("+")
-    );
+
+    let render_border = |left: char, middle: char, right: char| {
+        format!(
+            "{}{}{}",
+            left,
+            widths
+                .iter()
+                .map(|width| "─".repeat(width + 2))
+                .collect::<Vec<_>>()
+                .join(&middle.to_string()),
+            right
+        )
+    };
 
     let render_row = |values: Vec<String>| {
         let cells = values
@@ -1031,33 +1201,81 @@ fn render_ascii_table(headers: &[&str], rows: &[Vec<String>], aligns: &[&str]) -
             .enumerate()
             .map(|(index, value)| align_cell(value, widths[index], aligns[index]))
             .collect::<Vec<_>>();
-        format!("| {} |", cells.join(" | "))
+        format!("│ {} │", cells.join(" │ "))
     };
 
     let mut lines = vec![
-        border.clone(),
+        render_border('┌', '┬', '┐'),
         render_row(headers.iter().map(|item| (*item).to_string()).collect()),
-        border.clone(),
+        render_border('├', '┼', '┤'),
     ];
     for row in rows {
         lines.push(render_row(row.clone()));
-        lines.push(border.clone());
     }
+    lines.push(render_border('└', '┴', '┘'));
     lines.join("\n")
 }
 
 fn align_cell(value: String, width: usize, align: &str) -> String {
+    let value_width = visible_width(&value);
+    let padding = width.saturating_sub(value_width);
     match align {
-        "left" => format!("{value:<width$}"),
-        "right" => format!("{value:>width$}"),
+        "left" => format!("{value}{}", " ".repeat(padding)),
+        "right" => format!("{}{}", " ".repeat(padding), value),
         "center" => {
-            let total_padding = width.saturating_sub(value.len());
-            let left = total_padding / 2;
-            let right = total_padding - left;
+            let left = padding / 2;
+            let right = padding - left;
             format!("{}{}{}", " ".repeat(left), value, " ".repeat(right))
         }
         _ => value,
     }
+}
+
+fn visible_width(value: &str) -> usize {
+    UnicodeWidthStr::width(strip_ansi_codes(value).as_str())
+}
+
+fn strip_ansi_codes(value: &str) -> String {
+    let mut result = String::with_capacity(value.len());
+    let mut chars = value.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\u{1b}' && matches!(chars.peek(), Some('[')) {
+            chars.next();
+            for next in chars.by_ref() {
+                if ('@'..='~').contains(&next) {
+                    break;
+                }
+            }
+            continue;
+        }
+        result.push(ch);
+    }
+    result
+}
+
+fn style_enabled() -> bool {
+    io::stdout().is_terminal()
+        && env::var_os("NO_COLOR").is_none()
+        && !matches!(env::var("TERM").ok().as_deref(), Some("dumb"))
+}
+
+#[derive(Debug, Clone, Copy)]
+enum AnsiStyle {
+    Red,
+    Yellow,
+    Green,
+}
+
+fn style_text(value: &str, style: AnsiStyle) -> String {
+    if !style_enabled() {
+        return value.to_string();
+    }
+    let code = match style {
+        AnsiStyle::Red => "31",
+        AnsiStyle::Yellow => "33",
+        AnsiStyle::Green => "32",
+    };
+    format!("\u{1b}[{code}m{value}\u{1b}[0m")
 }
 
 #[derive(Debug)]
@@ -1101,8 +1319,9 @@ mod tests {
     use std::ffi::OsString;
 
     use super::{
-        CodexAdapter, build_codex_launch_command, decode_identity, has_resumable_session_under,
-        normalize_usage_response, parse_chatgpt_base_url,
+        CodexAdapter, build_codex_launch_command, codex_install_command, decode_identity,
+        has_resumable_session_under, normalize_usage_response, parse_chatgpt_base_url,
+        parse_yes_no, render_table, strip_ansi_codes, visible_width,
     };
     use crate::core::state::State;
 
@@ -1238,5 +1457,40 @@ mod tests {
         ));
         fs::remove_dir_all(&tmp)?;
         Ok(())
+    }
+
+    #[test]
+    fn parse_yes_no_accepts_expected_values_case_insensitively() {
+        assert_eq!(parse_yes_no("Y"), Some(true));
+        assert_eq!(parse_yes_no("yes"), Some(true));
+        assert_eq!(parse_yes_no("N"), Some(false));
+        assert_eq!(parse_yes_no("No"), Some(false));
+        assert_eq!(parse_yes_no("maybe"), None);
+    }
+
+    #[test]
+    fn install_command_uses_official_npm_package() {
+        let command = codex_install_command();
+        assert_eq!(command.args, vec!["install", "-g", "@openai/codex"]);
+    }
+
+    #[test]
+    fn strip_ansi_codes_keeps_visible_width_correct() {
+        let styled = "\u{1b}[32m80%\u{1b}[0m";
+        assert_eq!(strip_ansi_codes(styled), "80%");
+        assert_eq!(visible_width(styled), 3);
+    }
+
+    #[test]
+    fn table_uses_unicode_borders() {
+        let rendered = render_table(
+            &["A", "B"],
+            &[vec!["1".into(), "2".into()]],
+            &["left", "left"],
+        );
+        assert!(rendered.contains('┌'));
+        assert!(rendered.contains('┬'));
+        assert!(rendered.contains('└'));
+        assert!(rendered.contains('│'));
     }
 }

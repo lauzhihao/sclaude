@@ -48,7 +48,8 @@ struct GithubRelease {
 }
 
 pub fn self_update(force: bool) -> Result<UpdateOutcome> {
-    let executable_path = env::current_exe().context("failed to resolve current executable path")?;
+    let executable_path =
+        env::current_exe().context("failed to resolve current executable path")?;
     let previous_version = env!("CARGO_PKG_VERSION").to_string();
     let asset = resolve_release_asset()?;
 
@@ -115,7 +116,10 @@ fn resolve_release_asset() -> Result<ReleaseAsset> {
 fn fetch_latest_release_tag(repo: &str) -> Result<String> {
     let mut headers = HeaderMap::new();
     headers.insert(USER_AGENT, HeaderValue::from_static("scodex"));
-    headers.insert(ACCEPT, HeaderValue::from_static("application/vnd.github+json"));
+    headers.insert(
+        ACCEPT,
+        HeaderValue::from_static("application/vnd.github+json"),
+    );
     let client = Client::builder().default_headers(headers).build()?;
     let url = format!("https://api.github.com/repos/{repo}/releases/latest");
     let release = client
@@ -152,12 +156,16 @@ fn download_release_binary(asset: &ReleaseAsset) -> Result<Vec<u8>> {
 fn extract_binary_from_tar_gz(bytes: &[u8]) -> Result<Vec<u8>> {
     let decoder = GzDecoder::new(Cursor::new(bytes));
     let mut archive = Archive::new(decoder);
-    for entry in archive.entries().context("failed to read tar archive entries")? {
+    for entry in archive
+        .entries()
+        .context("failed to read tar archive entries")?
+    {
         let mut entry = entry.context("failed to read tar archive entry")?;
         let path = entry.path().context("failed to read tar entry path")?;
         if path.as_ref() == Path::new("scodex") {
             let mut contents = Vec::new();
-            entry.read_to_end(&mut contents)
+            entry
+                .read_to_end(&mut contents)
                 .context("failed to extract scodex from tar archive")?;
             return Ok(contents);
         }
@@ -185,8 +193,7 @@ fn update_sidecar_binaries(current_executable: &Path, binary: &[u8]) -> Result<(
         if path == current_executable || !path.exists() {
             continue;
         }
-        fs::write(&path, binary)
-            .with_context(|| format!("failed to update {}", path.display()))?;
+        fs::write(&path, binary).with_context(|| format!("failed to update {}", path.display()))?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
