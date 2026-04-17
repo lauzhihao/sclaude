@@ -184,10 +184,14 @@ fn render_table(
     }
     if let Some(summary) = summary {
         let total_width = widths.iter().sum::<usize>() + (widths.len() - 1) * 3;
+        let total_inner = total_width + 2;
+        lines.push(render_border('├', '┴', '┤'));
         let summary = align_cell(summary, total_width, "center");
         lines.push(format!("│ {} │", summary));
+        lines.push(format!("└{}┘", "─".repeat(total_inner)));
+    } else {
+        lines.push(render_border('└', '┴', '┘'));
     }
-    lines.push(render_border('└', '┴', '┘'));
     lines.join("\n")
 }
 
@@ -346,9 +350,15 @@ mod tests {
 
         let rendered = adapter.render_account_table(&state, None);
         let lines = rendered.lines().collect::<Vec<_>>();
+        let summary = crate::core::ui::messages().usable_account_summary(1);
 
+        // transition border before summary
+        assert_eq!(lines[lines.len() - 3].chars().next(), Some('├'));
+        // summary row
         assert_eq!(lines[lines.len() - 2].chars().next(), Some('│'));
-        assert!(lines[lines.len() - 2].contains("1 usable account(s)"));
+        assert!(lines[lines.len() - 2].contains(&summary));
+        // clean bottom border (no column dividers)
         assert_eq!(lines.last().and_then(|line| line.chars().next()), Some('└'));
+        assert!(!lines.last().unwrap().contains('┴'));
     }
 }
