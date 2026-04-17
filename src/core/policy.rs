@@ -10,7 +10,7 @@ pub fn choose_best_account<'a>(state: &'a State) -> Option<&'a AccountRecord> {
         .iter()
         .filter_map(|account| {
             let usage = state.usage_cache.get(&account.id)?;
-            if usage.needs_relogin {
+            if usage.needs_relogin || usage.last_sync_error.is_some() {
                 return None;
             }
             Some((build_score(account, usage), account))
@@ -46,7 +46,7 @@ pub fn identity_matches(account: &AccountRecord, live: &LiveIdentity) -> bool {
 }
 
 pub fn is_current_account_usable(usage: &UsageSnapshot) -> bool {
-    if usage.needs_relogin {
+    if usage.needs_relogin || usage.last_sync_error.is_some() {
         return false;
     }
 
@@ -157,6 +157,17 @@ mod tests {
     }
 
     #[test]
+    fn current_account_with_sync_error_is_not_usable() {
+        let usage = UsageSnapshot {
+            five_hour_remaining_percent: Some(80),
+            last_sync_error: Some("quota api failed".into()),
+            ..UsageSnapshot::default()
+        };
+
+        assert!(!is_current_account_usable(&usage));
+    }
+
+    #[test]
     fn best_account_prefers_five_hour_quota() {
         let state = State {
             version: 1,
@@ -203,5 +214,51 @@ mod tests {
         let best = choose_best_account(&state);
 
         assert_eq!(best.map(|item| item.id.as_str()), Some("five-heavy"));
+    }
+
+    #[test]
+    fn best_account_ignores_sync_error_candidates() {
+        let state = State {
+            version: 1,
+            accounts: vec![
+                AccountRecord {
+                    id: "stale".into(),
+                    email: "stale@example.com".into(),
+                    account_id: None,
+                    updated_at: 1,
+                    ..AccountRecord::default()
+                },
+                AccountRecord {
+                    id: "healthy".into(),
+                    email: "healthy@example.com".into(),
+                    account_id: None,
+                    updated_at: 1,
+                    ..AccountRecord::default()
+                },
+            ],
+            usage_cache: BTreeMap::from([
+                (
+                    "stale".into(),
+                    UsageSnapshot {
+                        five_hour_remaining_percent: Some(100),
+                        weekly_remaining_percent: Some(100),
+                        last_sync_error: Some("quota api failed".into()),
+                        ..UsageSnapshot::default()
+                    },
+                ),
+                (
+                    "healthy".into(),
+                    UsageSnapshot {
+                        five_hour_remaining_percent: Some(80),
+                        weekly_remaining_percent: Some(60),
+                        ..UsageSnapshot::default()
+                    },
+                ),
+            ]),
+        };
+
+        let best = choose_best_account(&state);
+
+        assert_eq!(best.map(|item| item.id.as_str()), Some("healthy"));
     }
 }
