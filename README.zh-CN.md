@@ -197,6 +197,7 @@ scodex pull [-i <identity_file>] [--path <repo_path>] <repo>
 - 默认从 `.scodex-account-pool/bundle.enc.json` 读取加密后的账号池
 - 会直接用远端快照覆盖本地账号池，不做 merge
 - 写入前会清空旧的本地账号目录，并重置本地 usage cache
+- 导入完成后会立即刷新实时额度，并打印最新账号列表
 - 如果密钥不对，会直接报解密失败，不会导入半套数据
 - `--path <repo_path>`：改用仓库内的其他子目录；必须是相对路径，且不能包含 `..`
 - `-i <identity_file>`：通过 `GIT_SSH_COMMAND` 把 SSH 私钥传给 git，用于 SSH 协议的仓库

@@ -320,6 +320,10 @@ pub fn run(cli: Cli) -> Result<i32> {
                 "{}",
                 ui.repo_pull_completed(&args.repo, outcome.imported_accounts)
             );
+            adapter.refresh_all_accounts(&mut state);
+            storage::save_state(&state_dir, &state)?;
+            let active = adapter.read_live_identity();
+            println!("{}", adapter.render_account_table(&state, active.as_ref()));
             0
         }
         Command::List => {
