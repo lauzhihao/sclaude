@@ -74,6 +74,7 @@ Use `scodex` as the default command. The legacy `auto-codex` wrapper is kept onl
 | `scodex push <repo>` | Push the local account pool into a Git repository subdirectory |
 | `scodex pull <repo>` | Pull an account pool from a Git repository subdirectory into the local state directory |
 | `scodex use <email>` | Switch directly to a known account by email |
+| `scodex rm <email>` | Remove a stored account by email (interactive confirm, `-y` to skip) |
 | `scodex list` | Refresh live usage, then show the latest account quotas |
 | `scodex refresh` | Refresh live usage for all known accounts and print the latest results |
 | `scodex import-auth <path>` | Import an `auth.json` file or a home directory containing `auth.json` |
@@ -139,6 +140,17 @@ scodex use <email>
 
 - switches directly to the known account whose email matches `<email>` case-insensitively
 - example: `scodex use lauzhihao@qq.com`
+
+### `rm`
+
+```bash
+scodex rm [-y] <email>
+```
+
+- removes the account whose email matches `<email>` case-insensitively from the local state
+- deletes the account's stored auth home under the state directory and clears its usage cache
+- prompts for a `Y/N` confirmation before deleting; `-y` (`--yes`) skips the prompt
+- without `-y`, requires an interactive terminal; refuses to run when stdin/stdout are non-TTY
 
 ### `deploy`
 

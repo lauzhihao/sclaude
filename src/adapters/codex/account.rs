@@ -151,6 +151,17 @@ impl CodexAdapter {
         let dst = codex_home().join("auth.json");
         atomic_copy(src, &dst)
     }
+
+    pub fn remove_account(&self, state_dir: &Path, state: &mut State, id: &str) -> Result<()> {
+        state.accounts.retain(|account| account.id != id);
+        state.usage_cache.remove(id);
+        let account_home = state_dir.join("accounts").join(id);
+        if account_home.exists() {
+            fs::remove_dir_all(&account_home)
+                .with_context(|| format!("failed to remove {}", account_home.display()))?;
+        }
+        Ok(())
+    }
 }
 
 fn atomic_copy(src: &Path, dst: &Path) -> Result<()> {

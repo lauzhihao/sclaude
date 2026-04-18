@@ -407,7 +407,7 @@ fn browser_open_command(url: &str) -> Option<(&'static str, Vec<String>)> {
     }
 }
 
-fn parse_yes_no(value: &str) -> Option<bool> {
+pub(crate) fn parse_yes_no(value: &str) -> Option<bool> {
     match value.trim().to_ascii_lowercase().as_str() {
         "y" | "yes" => Some(true),
         "n" | "no" => Some(false),

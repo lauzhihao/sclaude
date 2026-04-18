@@ -5,7 +5,7 @@ use crate::core::state::{
 };
 
 pub fn choose_best_account<'a>(state: &'a State) -> Option<&'a AccountRecord> {
-    let mut candidates: Vec<((i64, i64, f64, i64, i64), &AccountRecord)> = state
+    let mut candidates: Vec<((i64, i64, i64, f64, i64, i64), &AccountRecord)> = state
         .accounts
         .iter()
         .filter_map(|account| {
@@ -71,10 +71,12 @@ pub fn is_current_account_usable(usage: &UsageSnapshot) -> bool {
     five_hour_ok && weekly_ok
 }
 
-fn build_score(account: &AccountRecord, usage: &UsageSnapshot) -> (i64, i64, f64, i64, i64) {
+fn build_score(account: &AccountRecord, usage: &UsageSnapshot) -> (i64, i64, i64, f64, i64, i64) {
     (
         quota_score(usage.five_hour_remaining_percent),
         quota_score(usage.weekly_remaining_percent),
+        // 重置时间戳越早（数值越小）越优先；缺失视为无限远，排到最差
+        parse_refresh_ts(&usage.weekly_refresh_at),
         usage.credits_balance.unwrap_or(-1.0),
         usage.last_synced_at.unwrap_or(0),
         account.updated_at,
@@ -82,9 +84,23 @@ fn build_score(account: &AccountRecord, usage: &UsageSnapshot) -> (i64, i64, f64
 }
 
 fn quota_score(value: Option<i64>) -> i64 {
+    // 分档而非精确百分比：同档视为打平，让重置时间等次级键生效
     match value {
-        Some(value) => 1_000 + value,
         None => -1,
+        Some(p) if p >= 75 => 4,
+        Some(p) if p >= 50 => 3,
+        Some(p) if p >= 20 => 2,
+        Some(_) => 1,
+    }
+}
+
+fn parse_refresh_ts(value: &Option<String>) -> i64 {
+    match value
+        .as_deref()
+        .and_then(|raw| chrono::DateTime::parse_from_rfc3339(raw).ok())
+    {
+        Some(dt) => dt.timestamp(),
+        None => i64::MAX,
     }
 }
 
@@ -92,14 +108,16 @@ trait TotalCmpTuple {
     fn total_cmp(&self, other: &Self) -> std::cmp::Ordering;
 }
 
-impl TotalCmpTuple for (i64, i64, f64, i64, i64) {
+impl TotalCmpTuple for (i64, i64, i64, f64, i64, i64) {
     fn total_cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.0
             .cmp(&other.0)
             .then(self.1.cmp(&other.1))
-            .then_with(|| self.2.total_cmp(&other.2))
-            .then(self.3.cmp(&other.3))
+            // 重置时间戳：升序（越早越优），所以在降序外壳里反向比较
+            .then_with(|| other.2.cmp(&self.2))
+            .then_with(|| self.3.total_cmp(&other.3))
             .then(self.4.cmp(&other.4))
+            .then(self.5.cmp(&other.5))
     }
 }
 
@@ -287,6 +305,164 @@ mod tests {
         let best = choose_best_account(&state);
 
         assert_eq!(best.map(|item| item.id.as_str()), Some("healthy"));
+    }
+
+    #[test]
+    fn best_account_uses_refresh_when_quotas_in_same_tier() {
+        // 5h 55% vs 62% 属同一档（50-74），不应让 7 个点的差异盖过重置时间
+        let state = State {
+            version: 1,
+            accounts: vec![
+                AccountRecord {
+                    id: "higher-pct-later-reset".into(),
+                    email: "later@example.com".into(),
+                    account_id: None,
+                    updated_at: 1,
+                    ..AccountRecord::default()
+                },
+                AccountRecord {
+                    id: "lower-pct-sooner-reset".into(),
+                    email: "sooner@example.com".into(),
+                    account_id: None,
+                    updated_at: 1,
+                    ..AccountRecord::default()
+                },
+            ],
+            usage_cache: BTreeMap::from([
+                (
+                    "higher-pct-later-reset".into(),
+                    UsageSnapshot {
+                        five_hour_remaining_percent: Some(62),
+                        weekly_remaining_percent: Some(55),
+                        weekly_refresh_at: Some("2026-04-20T04:00:00Z".into()),
+                        credits_balance: Some(0.0),
+                        last_synced_at: Some(10),
+                        ..UsageSnapshot::default()
+                    },
+                ),
+                (
+                    "lower-pct-sooner-reset".into(),
+                    UsageSnapshot {
+                        five_hour_remaining_percent: Some(55),
+                        weekly_remaining_percent: Some(62),
+                        weekly_refresh_at: Some("2026-04-18T14:00:00Z".into()),
+                        credits_balance: Some(0.0),
+                        last_synced_at: Some(10),
+                        ..UsageSnapshot::default()
+                    },
+                ),
+            ]),
+        };
+
+        let best = choose_best_account(&state);
+
+        assert_eq!(
+            best.map(|item| item.id.as_str()),
+            Some("lower-pct-sooner-reset")
+        );
+    }
+
+    #[test]
+    fn best_account_prefers_earlier_weekly_refresh_on_tie() {
+        // 5h% / weekly% / credits / last_synced_at 全打平时，应按重置时间早者优先
+        let state = State {
+            version: 1,
+            accounts: vec![
+                AccountRecord {
+                    id: "later".into(),
+                    email: "later@example.com".into(),
+                    account_id: None,
+                    updated_at: 1,
+                    ..AccountRecord::default()
+                },
+                AccountRecord {
+                    id: "sooner".into(),
+                    email: "sooner@example.com".into(),
+                    account_id: None,
+                    updated_at: 1,
+                    ..AccountRecord::default()
+                },
+            ],
+            usage_cache: BTreeMap::from([
+                (
+                    "later".into(),
+                    UsageSnapshot {
+                        five_hour_remaining_percent: Some(80),
+                        weekly_remaining_percent: Some(50),
+                        weekly_refresh_at: Some("2026-04-20T04:00:00Z".into()),
+                        credits_balance: Some(0.0),
+                        last_synced_at: Some(10),
+                        ..UsageSnapshot::default()
+                    },
+                ),
+                (
+                    "sooner".into(),
+                    UsageSnapshot {
+                        five_hour_remaining_percent: Some(80),
+                        weekly_remaining_percent: Some(50),
+                        weekly_refresh_at: Some("2026-04-18T14:00:00Z".into()),
+                        credits_balance: Some(0.0),
+                        last_synced_at: Some(10),
+                        ..UsageSnapshot::default()
+                    },
+                ),
+            ]),
+        };
+
+        let best = choose_best_account(&state);
+
+        assert_eq!(best.map(|item| item.id.as_str()), Some("sooner"));
+    }
+
+    #[test]
+    fn best_account_treats_missing_refresh_as_worst_on_tie() {
+        let state = State {
+            version: 1,
+            accounts: vec![
+                AccountRecord {
+                    id: "unknown-refresh".into(),
+                    email: "unknown@example.com".into(),
+                    account_id: None,
+                    updated_at: 1,
+                    ..AccountRecord::default()
+                },
+                AccountRecord {
+                    id: "known-refresh".into(),
+                    email: "known@example.com".into(),
+                    account_id: None,
+                    updated_at: 1,
+                    ..AccountRecord::default()
+                },
+            ],
+            usage_cache: BTreeMap::from([
+                (
+                    "unknown-refresh".into(),
+                    UsageSnapshot {
+                        five_hour_remaining_percent: Some(80),
+                        weekly_remaining_percent: Some(50),
+                        weekly_refresh_at: None,
+                        credits_balance: Some(0.0),
+                        last_synced_at: Some(10),
+                        ..UsageSnapshot::default()
+                    },
+                ),
+                (
+                    "known-refresh".into(),
+                    UsageSnapshot {
+                        five_hour_remaining_percent: Some(80),
+                        weekly_remaining_percent: Some(50),
+                        weekly_refresh_at: Some("2099-01-01T00:00:00Z".into()),
+                        credits_balance: Some(0.0),
+                        last_synced_at: Some(10),
+                        ..UsageSnapshot::default()
+                    },
+                ),
+            ]),
+        };
+
+        let best = choose_best_account(&state);
+
+        assert_eq!(best.map(|item| item.id.as_str()), Some("known-refresh"));
     }
 
     #[test]

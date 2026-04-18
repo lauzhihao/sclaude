@@ -117,6 +117,38 @@ impl Messages {
         }
     }
 
+    pub fn confirm_rm(&self, email: &str) -> String {
+        if self.is_zh() {
+            format!("确认删除账号 {email}？此操作不可恢复 (Y/N)：")
+        } else {
+            format!("Remove account {email}? This cannot be undone (Y/N): ")
+        }
+    }
+
+    pub fn rm_cancelled(&self) -> &'static str {
+        if self.is_zh() {
+            "已取消。"
+        } else {
+            "Cancelled."
+        }
+    }
+
+    pub fn removed_account(&self, email: &str) -> String {
+        if self.is_zh() {
+            format!("已移除 {email}")
+        } else {
+            format!("Removed {email}")
+        }
+    }
+
+    pub fn rm_requires_tty(&self) -> &'static str {
+        if self.is_zh() {
+            "当前输入不是终端；请加 -y 跳过确认。"
+        } else {
+            "Input is not a terminal; pass -y to skip confirmation."
+        }
+    }
+
     pub fn refreshed_accounts(&self, count: usize) -> String {
         if self.is_zh() {
             format!("已刷新 {count} 个账号。")

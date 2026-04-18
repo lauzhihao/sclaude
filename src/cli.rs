@@ -33,6 +33,7 @@ pub enum Command {
     Push(RepoSyncArgs),
     Pull(RepoSyncArgs),
     Use(UseArgs),
+    Rm(RmArgs),
     List,
     Refresh,
     #[command(visible_alias = "upgrade")]
@@ -106,6 +107,13 @@ pub struct RepoSyncArgs {
 
 #[derive(Debug, Args)]
 pub struct UseArgs {
+    pub email: String,
+}
+
+#[derive(Debug, Args)]
+pub struct RmArgs {
+    #[arg(short = 'y', long = "yes")]
+    pub assume_yes: bool,
     pub email: String,
 }
 
@@ -240,6 +248,42 @@ pub fn run(cli: Cli) -> Result<i32> {
                 .unwrap_or_default();
             print_selection(ui.selection_switched(), record, &usage);
             storage::save_state(&state_dir, &state)?;
+            0
+        }
+        Command::Rm(args) => {
+            adapter.import_known_sources(&state_dir, &mut state);
+            let Some((id, email)) = adapter
+                .find_account_by_email(&state, &args.email)
+                .map(|record| (record.id.clone(), record.email.clone()))
+            else {
+                println!("{}", ui.unknown_account(&args.email));
+                storage::save_state(&state_dir, &state)?;
+                return Ok(1);
+            };
+            if !args.assume_yes {
+                use std::io::{self, IsTerminal, Write};
+                if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+                    println!("{}", ui.rm_requires_tty());
+                    return Ok(1);
+                }
+                loop {
+                    print!("{}", ui.confirm_rm(&email));
+                    let _ = io::stdout().flush();
+                    let mut line = String::new();
+                    io::stdin().read_line(&mut line)?;
+                    match crate::adapters::codex::parse_yes_no(&line) {
+                        Some(true) => break,
+                        Some(false) => {
+                            println!("{}", ui.rm_cancelled());
+                            return Ok(0);
+                        }
+                        None => println!("{}", ui.invalid_yes_no()),
+                    }
+                }
+            }
+            adapter.remove_account(&state_dir, &mut state, &id)?;
+            storage::save_state(&state_dir, &state)?;
+            println!("{}", ui.removed_account(&email));
             0
         }
         Command::Deploy(args) => {
@@ -399,6 +443,7 @@ enum HelpTopic {
     Push,
     Pull,
     Use,
+    Rm,
     List,
     Refresh,
     Update,
@@ -447,6 +492,7 @@ fn command_help_topic(name: &str) -> Option<HelpTopic> {
         "push" => Some(HelpTopic::Push),
         "pull" => Some(HelpTopic::Pull),
         "use" => Some(HelpTopic::Use),
+        "rm" => Some(HelpTopic::Rm),
         "list" => Some(HelpTopic::List),
         "refresh" => Some(HelpTopic::Refresh),
         "update" | "upgrade" => Some(HelpTopic::Update),
@@ -515,6 +561,7 @@ fn render_help_en(topic: HelpTopic) -> String {
                 "  use          Switch directly to a known account by email"
             )
             .unwrap();
+            writeln!(&mut out, "  rm           Remove a stored account by email").unwrap();
             writeln!(&mut out, "  list         Show the latest account quotas").unwrap();
             writeln!(
                 &mut out,
@@ -728,6 +775,21 @@ fn render_help_en(topic: HelpTopic) -> String {
             writeln!(&mut out, "Options:").unwrap();
             writeln!(&mut out, "  -h, --help  Print help").unwrap();
         }
+        HelpTopic::Rm => {
+            writeln!(&mut out, "Usage:").unwrap();
+            writeln!(&mut out, "  scodex rm [OPTIONS] <EMAIL>").unwrap();
+            writeln!(&mut out).unwrap();
+            writeln!(&mut out, "Arguments:").unwrap();
+            writeln!(&mut out, "  <EMAIL>  Account email to remove").unwrap();
+            writeln!(&mut out).unwrap();
+            writeln!(&mut out, "Options:").unwrap();
+            writeln!(
+                &mut out,
+                "  -y, --yes   Skip the interactive confirmation prompt"
+            )
+            .unwrap();
+            writeln!(&mut out, "  -h, --help  Print help").unwrap();
+        }
         HelpTopic::List => {
             writeln!(&mut out, "Usage:").unwrap();
             writeln!(&mut out, "  scodex list").unwrap();
@@ -806,6 +868,7 @@ fn render_help_zh(topic: HelpTopic) -> String {
             writeln!(&mut out, "  push         把本地账号池推送到 Git 仓库").unwrap();
             writeln!(&mut out, "  pull         从 Git 仓库拉取账号池").unwrap();
             writeln!(&mut out, "  use          按邮箱直接切换到一个已知账号").unwrap();
+            writeln!(&mut out, "  rm           按邮箱删除一个已保存的账号").unwrap();
             writeln!(&mut out, "  list         显示最新账号额度").unwrap();
             writeln!(&mut out, "  refresh      刷新所有已知账号的实时额度").unwrap();
             writeln!(&mut out, "  update       自更新 scodex [别名：upgrade]").unwrap();
@@ -969,6 +1032,17 @@ fn render_help_zh(topic: HelpTopic) -> String {
             writeln!(&mut out, "  <EMAIL>  要切换到的账号邮箱").unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "选项：").unwrap();
+            writeln!(&mut out, "  -h, --help  显示帮助").unwrap();
+        }
+        HelpTopic::Rm => {
+            writeln!(&mut out, "用法：").unwrap();
+            writeln!(&mut out, "  scodex rm [选项] <EMAIL>").unwrap();
+            writeln!(&mut out).unwrap();
+            writeln!(&mut out, "参数：").unwrap();
+            writeln!(&mut out, "  <EMAIL>  要删除的账号邮箱").unwrap();
+            writeln!(&mut out).unwrap();
+            writeln!(&mut out, "选项：").unwrap();
+            writeln!(&mut out, "  -y, --yes   跳过交互式二次确认").unwrap();
             writeln!(&mut out, "  -h, --help  显示帮助").unwrap();
         }
         HelpTopic::List => {

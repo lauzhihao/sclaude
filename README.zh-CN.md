@@ -74,6 +74,7 @@ cargo build --release
 | `scodex push <repo>` | 把本地账号池推送到 Git 仓库的指定子目录 |
 | `scodex pull <repo>` | 从 Git 仓库的指定子目录拉取账号池并导入到本地状态目录 |
 | `scodex use <email>` | 按邮箱直接切换到一个已知账号 |
+| `scodex rm <email>` | 按邮箱删除一个已保存的账号（默认会交互式二次确认，可加 `-y` 跳过） |
 | `scodex list` | 先刷新实时额度，再显示最新账号额度 |
 | `scodex refresh` | 刷新所有已知账号的实时额度，并直接打印最新结果 |
 | `scodex import-auth <path>` | 导入一个 `auth.json` 文件，或包含 `auth.json` 的目录 |
@@ -139,6 +140,17 @@ scodex use <email>
 
 - 会按邮箱大小写不敏感精确匹配已知账号，并直接切换过去
 - 示例：`scodex use lauzhihao@qq.com`
+
+### `rm`
+
+```bash
+scodex rm [-y] <email>
+```
+
+- 按邮箱大小写不敏感匹配账号，从本地状态里移除
+- 同时清除该账号在状态目录下的 auth 家目录与 usage 缓存
+- 默认会弹出 `Y/N` 二次确认；加 `-y`（`--yes`）可跳过
+- 不加 `-y` 时需要交互式终端；stdin/stdout 非 TTY 时会拒绝执行
 
 ### `deploy`
 
