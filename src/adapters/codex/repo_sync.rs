@@ -100,13 +100,20 @@ impl CodexAdapter {
 
         println!("{}", ui.repo_pull_start(repo));
         if !bundle_path.exists() {
-            bail!("{}", ui.repo_pull_missing_bundle(&bundle_dir.display().to_string()));
+            bail!(
+                "{}",
+                ui.repo_pull_missing_bundle(&bundle_dir.display().to_string())
+            );
         }
 
-        let bundle: RepoBundle = serde_json::from_slice(&decrypt_bundle_file(&bundle_path, &bundle_key)?)
-            .context("failed to parse decrypted account-pool bundle")?;
+        let bundle: RepoBundle =
+            serde_json::from_slice(&decrypt_bundle_file(&bundle_path, &bundle_key)?)
+                .context("failed to parse decrypted account-pool bundle")?;
         if bundle.accounts.is_empty() {
-            bail!("{}", ui.repo_pull_no_accounts(&bundle_dir.display().to_string()));
+            bail!(
+                "{}",
+                ui.repo_pull_no_accounts(&bundle_dir.display().to_string())
+            );
         }
         *state = overwrite_local_account_pool(state_dir, &bundle)?;
 
@@ -337,12 +344,8 @@ fn overwrite_local_account_pool(state_dir: &Path, bundle: &RepoBundle) -> Result
         fs::remove_dir_all(&final_accounts)
             .with_context(|| format!("failed to remove {}", final_accounts.display()))?;
     }
-    fs::rename(&staging_accounts, &final_accounts).with_context(|| {
-        format!(
-            "failed to move {} into place",
-            final_accounts.display()
-        )
-    })?;
+    fs::rename(&staging_accounts, &final_accounts)
+        .with_context(|| format!("failed to move {} into place", final_accounts.display()))?;
     let _ = fs::remove_dir_all(&staging_root);
 
     Ok(State {
@@ -388,7 +391,15 @@ fn git_add(git_bin: &Path, checkout_dir: &Path, bundle_dir: &Path) -> Result<()>
         git_bin,
         ["-C", ""],
         None,
-        Some((checkout_dir, vec!["add".into(), "--all".into(), "--".into(), bundle_dir.display().to_string()])),
+        Some((
+            checkout_dir,
+            vec![
+                "add".into(),
+                "--all".into(),
+                "--".into(),
+                bundle_dir.display().to_string(),
+            ],
+        )),
     )?;
     if !output.status.success() {
         bail!(
@@ -456,7 +467,10 @@ fn git_push(git_bin: &Path, checkout_dir: &Path, repo: &str) -> Result<()> {
         git_bin,
         ["-C", ""],
         None,
-        Some((checkout_dir, vec!["push".into(), "origin".into(), "HEAD".into()])),
+        Some((
+            checkout_dir,
+            vec!["push".into(), "origin".into(), "HEAD".into()],
+        )),
     )?;
     if !output.status.success() {
         let stderr = git_stderr(&output);
@@ -597,7 +611,10 @@ mod tests {
 
     #[test]
     fn bundle_dir_defaults_when_missing() -> Result<()> {
-        assert_eq!(resolve_bundle_dir(None)?, PathBuf::from(".scodex-account-pool"));
+        assert_eq!(
+            resolve_bundle_dir(None)?,
+            PathBuf::from(".scodex-account-pool")
+        );
         Ok(())
     }
 
@@ -649,7 +666,8 @@ mod tests {
 
     #[test]
     fn overwrite_local_account_pool_replaces_existing_accounts() -> Result<()> {
-        let state_dir = std::env::temp_dir().join(format!("scodex-overwrite-{}", uuid::Uuid::new_v4()));
+        let state_dir =
+            std::env::temp_dir().join(format!("scodex-overwrite-{}", uuid::Uuid::new_v4()));
         let old_home = state_dir.join("accounts").join("old-acct");
         fs::create_dir_all(&old_home)?;
         fs::write(old_home.join("auth.json"), "{\"tokens\":{}}")?;
@@ -675,8 +693,20 @@ mod tests {
         assert_eq!(state.accounts[0].id, "acct-1");
         assert!(state.usage_cache.is_empty());
         assert!(!state_dir.join("accounts").join("old-acct").exists());
-        assert!(state_dir.join("accounts").join("acct-1").join("auth.json").exists());
-        assert!(state_dir.join("accounts").join("acct-1").join("config.toml").exists());
+        assert!(
+            state_dir
+                .join("accounts")
+                .join("acct-1")
+                .join("auth.json")
+                .exists()
+        );
+        assert!(
+            state_dir
+                .join("accounts")
+                .join("acct-1")
+                .join("config.toml")
+                .exists()
+        );
 
         fs::remove_dir_all(&state_dir)?;
         Ok(())

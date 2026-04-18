@@ -203,7 +203,7 @@ scodex refresh
 
 - calls the live usage API for all known accounts
 - prints the refreshed account list immediately after the API calls finish
-- the current Rust release refreshes sequentially
+- the current Rust release refreshes usage in parallel
 
 ### `import-auth`
 

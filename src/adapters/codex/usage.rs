@@ -1,6 +1,9 @@
+use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc;
+use std::thread;
 
 use reqwest::StatusCode;
 use reqwest::blocking::Client;
@@ -11,12 +14,16 @@ use super::auth::normalize_plan;
 use super::{CodexAdapter, now_ts};
 use crate::core::state::{AccountRecord, State, UsageSnapshot};
 
+const MAX_REFRESH_WORKERS: usize = 8;
+
 impl CodexAdapter {
     pub fn refresh_all_accounts(&self, state: &mut State) {
-        for account in &state.accounts {
-            let previous = state.usage_cache.get(&account.id).cloned();
-            let usage = self.fetch_usage_for_account(account, previous.as_ref());
-            state.usage_cache.insert(account.id.clone(), usage);
+        let refreshed =
+            collect_refreshed_usage(&state.accounts, &state.usage_cache, |account, previous| {
+                self.fetch_usage_for_account(account, previous)
+            });
+        for (account_id, usage) in refreshed {
+            state.usage_cache.insert(account_id, usage);
         }
     }
 
@@ -162,6 +169,88 @@ impl CodexAdapter {
         normalized.needs_relogin = false;
         normalized
     }
+}
+
+fn collect_refreshed_usage<F>(
+    accounts: &[AccountRecord],
+    usage_cache: &BTreeMap<String, UsageSnapshot>,
+    fetcher: F,
+) -> Vec<(String, UsageSnapshot)>
+where
+    F: Fn(&AccountRecord, Option<&UsageSnapshot>) -> UsageSnapshot + Sync,
+{
+    collect_refreshed_usage_with_worker_count(
+        accounts,
+        usage_cache,
+        refresh_worker_count(accounts.len()),
+        fetcher,
+    )
+}
+
+fn collect_refreshed_usage_with_worker_count<F>(
+    accounts: &[AccountRecord],
+    usage_cache: &BTreeMap<String, UsageSnapshot>,
+    worker_count: usize,
+    fetcher: F,
+) -> Vec<(String, UsageSnapshot)>
+where
+    F: Fn(&AccountRecord, Option<&UsageSnapshot>) -> UsageSnapshot + Sync,
+{
+    if accounts.is_empty() {
+        return Vec::new();
+    }
+
+    let worker_count = worker_count.max(1).min(accounts.len());
+    if worker_count == 1 {
+        return accounts
+            .iter()
+            .map(|account| {
+                let usage = fetcher(account, usage_cache.get(&account.id));
+                (account.id.clone(), usage)
+            })
+            .collect();
+    }
+
+    let chunk_size = accounts.len().div_ceil(worker_count);
+    thread::scope(|scope| {
+        let (sender, receiver) = mpsc::channel();
+        for chunk in accounts.chunks(chunk_size) {
+            let sender = sender.clone();
+            let fetcher = &fetcher;
+            scope.spawn(move || {
+                let mut refreshed = Vec::with_capacity(chunk.len());
+                for account in chunk {
+                    let usage = fetcher(account, usage_cache.get(&account.id));
+                    refreshed.push((account.id.clone(), usage));
+                }
+                let _ = sender.send(refreshed);
+            });
+        }
+        drop(sender);
+
+        let mut refreshed = Vec::with_capacity(accounts.len());
+        while let Ok(mut chunk) = receiver.recv() {
+            refreshed.append(&mut chunk);
+        }
+        refreshed
+    })
+}
+
+fn refresh_worker_count(account_count: usize) -> usize {
+    let detected = thread::available_parallelism()
+        .map(usize::from)
+        .unwrap_or(4);
+    bounded_refresh_worker_count(account_count, detected)
+}
+
+fn bounded_refresh_worker_count(account_count: usize, available_parallelism: usize) -> usize {
+    if account_count == 0 {
+        return 0;
+    }
+    available_parallelism
+        .max(1)
+        .min(MAX_REFRESH_WORKERS)
+        .min(account_count)
 }
 
 fn merge_usage_with_previous(
@@ -375,8 +464,15 @@ enum WindowRole {
 
 #[cfg(test)]
 mod tests {
-    use super::{merge_usage_with_previous, normalize_usage_response, parse_chatgpt_base_url};
-    use crate::core::state::UsageSnapshot;
+    use std::collections::BTreeMap;
+    use std::thread;
+    use std::time::Duration;
+
+    use super::{
+        bounded_refresh_worker_count, collect_refreshed_usage_with_worker_count,
+        merge_usage_with_previous, normalize_usage_response, parse_chatgpt_base_url,
+    };
+    use crate::core::state::{AccountRecord, UsageSnapshot};
 
     #[test]
     fn parse_chatgpt_base_url_reads_config_line() {
@@ -443,5 +539,159 @@ mod tests {
         assert_eq!(merged.weekly_refresh_at, None);
         assert_eq!(merged.credits_balance, None);
         assert_eq!(merged.last_sync_error.as_deref(), Some("quota api failed"));
+    }
+
+    #[test]
+    fn bounded_refresh_worker_count_respects_limits() {
+        assert_eq!(bounded_refresh_worker_count(0, 4), 0);
+        assert_eq!(bounded_refresh_worker_count(2, 8), 2);
+        assert_eq!(bounded_refresh_worker_count(12, 3), 3);
+        assert_eq!(bounded_refresh_worker_count(20, 32), 8);
+    }
+
+    #[test]
+    fn collect_refreshed_usage_preserves_previous_snapshot_lookup_per_account() {
+        let accounts = vec![
+            AccountRecord {
+                id: "acct-a".into(),
+                email: "a@example.com".into(),
+                ..Default::default()
+            },
+            AccountRecord {
+                id: "acct-b".into(),
+                email: "b@example.com".into(),
+                ..Default::default()
+            },
+        ];
+        let usage_cache = BTreeMap::from([
+            (
+                "acct-a".into(),
+                UsageSnapshot {
+                    credits_balance: Some(1.5),
+                    ..Default::default()
+                },
+            ),
+            (
+                "acct-b".into(),
+                UsageSnapshot {
+                    credits_balance: Some(9.0),
+                    ..Default::default()
+                },
+            ),
+        ]);
+
+        let refreshed = collect_refreshed_usage_with_worker_count(
+            &accounts,
+            &usage_cache,
+            2,
+            |account, previous| UsageSnapshot {
+                credits_balance: Some(
+                    previous
+                        .and_then(|item| item.credits_balance)
+                        .unwrap_or_default()
+                        + 1.0,
+                ),
+                plan: Some(account.email.clone()),
+                ..Default::default()
+            },
+        );
+
+        let refreshed = refreshed.into_iter().collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            refreshed
+                .get("acct-a")
+                .and_then(|item| item.credits_balance),
+            Some(2.5)
+        );
+        assert_eq!(
+            refreshed
+                .get("acct-b")
+                .and_then(|item| item.credits_balance),
+            Some(10.0)
+        );
+        assert_eq!(
+            refreshed
+                .get("acct-a")
+                .and_then(|item| item.plan.as_deref()),
+            Some("a@example.com")
+        );
+        assert_eq!(
+            refreshed
+                .get("acct-b")
+                .and_then(|item| item.plan.as_deref()),
+            Some("b@example.com")
+        );
+    }
+
+    #[test]
+    fn collect_refreshed_usage_keeps_all_accounts_when_workers_finish_out_of_order() {
+        let accounts = vec![
+            AccountRecord {
+                id: "acct-a".into(),
+                email: "a@example.com".into(),
+                ..Default::default()
+            },
+            AccountRecord {
+                id: "acct-b".into(),
+                email: "b@example.com".into(),
+                ..Default::default()
+            },
+            AccountRecord {
+                id: "acct-c".into(),
+                email: "c@example.com".into(),
+                ..Default::default()
+            },
+            AccountRecord {
+                id: "acct-d".into(),
+                email: "d@example.com".into(),
+                ..Default::default()
+            },
+        ];
+
+        let refreshed = collect_refreshed_usage_with_worker_count(
+            &accounts,
+            &BTreeMap::new(),
+            2,
+            |account, _previous| {
+                let delay_ms = match account.id.as_str() {
+                    "acct-a" => 40,
+                    "acct-b" => 5,
+                    "acct-c" => 30,
+                    _ => 10,
+                };
+                thread::sleep(Duration::from_millis(delay_ms));
+                UsageSnapshot {
+                    plan: Some(account.id.clone()),
+                    ..Default::default()
+                }
+            },
+        );
+
+        let refreshed = refreshed.into_iter().collect::<BTreeMap<_, _>>();
+        assert_eq!(refreshed.len(), 4);
+        assert_eq!(
+            refreshed
+                .get("acct-a")
+                .and_then(|item| item.plan.as_deref()),
+            Some("acct-a")
+        );
+        assert_eq!(
+            refreshed
+                .get("acct-b")
+                .and_then(|item| item.plan.as_deref()),
+            Some("acct-b")
+        );
+        assert_eq!(
+            refreshed
+                .get("acct-c")
+                .and_then(|item| item.plan.as_deref()),
+            Some("acct-c")
+        );
+        assert_eq!(
+            refreshed
+                .get("acct-d")
+                .and_then(|item| item.plan.as_deref()),
+            Some("acct-d")
+        );
     }
 }

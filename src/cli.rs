@@ -355,9 +355,7 @@ fn format_percent(value: Option<i64>) -> String {
 
 fn build_autofill_request(args: &LoginArgs, ui: &ui::Messages) -> Result<AutofillRequest> {
     match (args.username.as_deref(), args.password.as_deref()) {
-        (Some(email), Some(password))
-            if !email.trim().is_empty() && !password.is_empty() =>
-        {
+        (Some(email), Some(password)) if !email.trim().is_empty() && !password.is_empty() => {
             Ok(AutofillRequest {
                 email: email.trim().to_string(),
                 password: password.to_string(),
@@ -664,11 +662,7 @@ fn render_help_en(topic: HelpTopic) -> String {
                 "      --path <REPO_PATH>  Repository subdirectory used for the account pool"
             )
             .unwrap();
-            writeln!(
-                &mut out,
-                "Environment:"
-            )
-            .unwrap();
+            writeln!(&mut out, "Environment:").unwrap();
             writeln!(
                 &mut out,
                 "  SCODEX_POOL_KEY  Symmetric key source for encrypting the account pool"
@@ -693,11 +687,7 @@ fn render_help_en(topic: HelpTopic) -> String {
                 "      --path <REPO_PATH>  Repository subdirectory used for the account pool"
             )
             .unwrap();
-            writeln!(
-                &mut out,
-                "Environment:"
-            )
-            .unwrap();
+            writeln!(&mut out, "Environment:").unwrap();
             writeln!(
                 &mut out,
                 "  SCODEX_POOL_KEY  Symmetric key source for decrypting the account pool"
@@ -872,7 +862,11 @@ fn render_help_zh(topic: HelpTopic) -> String {
                 "      --oauth              使用浏览器 OAuth 流程并自动填充，需要同时传入 --username 和 --password"
             )
             .unwrap();
-            writeln!(&mut out, "      --username <EMAIL>   --oauth 模式下使用的邮箱").unwrap();
+            writeln!(
+                &mut out,
+                "      --username <EMAIL>   --oauth 模式下使用的邮箱"
+            )
+            .unwrap();
             writeln!(
                 &mut out,
                 "      --password <PASS>    --oauth 模式下使用的密码（会出现在 ps 中，建议仅在可信 shell 使用）"
@@ -914,11 +908,7 @@ fn render_help_zh(topic: HelpTopic) -> String {
             )
             .unwrap();
             writeln!(&mut out, "环境变量：").unwrap();
-            writeln!(
-                &mut out,
-                "  SCODEX_POOL_KEY  用于加密账号池的对称密钥来源"
-            )
-            .unwrap();
+            writeln!(&mut out, "  SCODEX_POOL_KEY  用于加密账号池的对称密钥来源").unwrap();
             writeln!(&mut out, "  -h, --help            显示帮助").unwrap();
         }
         HelpTopic::Pull => {
@@ -935,11 +925,7 @@ fn render_help_zh(topic: HelpTopic) -> String {
             )
             .unwrap();
             writeln!(&mut out, "环境变量：").unwrap();
-            writeln!(
-                &mut out,
-                "  SCODEX_POOL_KEY  用于解密账号池的对称密钥来源"
-            )
-            .unwrap();
+            writeln!(&mut out, "  SCODEX_POOL_KEY  用于解密账号池的对称密钥来源").unwrap();
             writeln!(&mut out, "  -h, --help            显示帮助").unwrap();
         }
         HelpTopic::Use => {

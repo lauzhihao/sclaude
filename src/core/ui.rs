@@ -554,9 +554,13 @@ impl Messages {
 
     pub fn repo_sync_decrypt_failed(&self, env_name: &str) -> String {
         if self.is_zh() {
-            format!("账号池解密失败。请检查 {env_name} 是否正确，或确认远端仓库里的加密 bundle 没有损坏。")
+            format!(
+                "账号池解密失败。请检查 {env_name} 是否正确，或确认远端仓库里的加密 bundle 没有损坏。"
+            )
         } else {
-            format!("Failed to decrypt the account pool. Check whether {env_name} is correct and whether the encrypted bundle in the repository is intact.")
+            format!(
+                "Failed to decrypt the account pool. Check whether {env_name} is correct and whether the encrypted bundle in the repository is intact."
+            )
         }
     }
 
@@ -570,9 +574,13 @@ impl Messages {
 
     pub fn repo_sync_clone_auth_failed(&self, repo: &str) -> String {
         if self.is_zh() {
-            format!("无法访问仓库：{repo}。请检查仓库 URL，以及当前 Git 凭据、SSH key 或 PAT 是否有这个私有仓库的读取权限。")
+            format!(
+                "无法访问仓库：{repo}。请检查仓库 URL，以及当前 Git 凭据、SSH key 或 PAT 是否有这个私有仓库的读取权限。"
+            )
         } else {
-            format!("Cannot access repository: {repo}. Check the repository URL and whether your current Git credentials, SSH key, or PAT has read access to this private repository.")
+            format!(
+                "Cannot access repository: {repo}. Check the repository URL and whether your current Git credentials, SSH key, or PAT has read access to this private repository."
+            )
         }
     }
 
@@ -610,9 +618,13 @@ impl Messages {
 
     pub fn repo_sync_push_auth_failed(&self, repo: &str) -> String {
         if self.is_zh() {
-            format!("无法写入仓库：{repo}。请检查当前 Git 凭据、SSH key 或 PAT 是否有这个私有仓库的写入权限。")
+            format!(
+                "无法写入仓库：{repo}。请检查当前 Git 凭据、SSH key 或 PAT 是否有这个私有仓库的写入权限。"
+            )
         } else {
-            format!("Cannot write to repository: {repo}. Check whether your current Git credentials, SSH key, or PAT has write access to this private repository.")
+            format!(
+                "Cannot write to repository: {repo}. Check whether your current Git credentials, SSH key, or PAT has write access to this private repository."
+            )
         }
     }
 

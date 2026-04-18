@@ -4,14 +4,14 @@ use std::io::{BufRead, BufReader, Read};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, bail, Context, Result};
-use serde_json::{json, Value};
+use anyhow::{Context, Result, anyhow, bail};
+use serde_json::{Value, json};
 use tungstenite::stream::MaybeTlsStream;
-use tungstenite::{connect, Error as WsError, Message, WebSocket};
+use tungstenite::{Error as WsError, Message, WebSocket, connect};
 
 use crate::core::ui as core_ui;
 
