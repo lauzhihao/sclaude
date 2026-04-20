@@ -254,6 +254,19 @@ fn collect_profile_files_recursive(
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
+            // 跳过 Claude Code 运行时数据目录（不需要在 bundle 中同步）
+            let dir_name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("");
+            if matches!(dir_name,
+                "file-history" | "projects" | "sessions" | "tasks" |
+                "plugins" | "remote" | "usage-data" | "backups" | "cache" |
+                "paste-cache" | "session-env" | "shell-snapshots" |
+                "telemetry" | "todos" | "plans" | "debug" | "statsig"
+            ) {
+                continue;
+            }
             collect_profile_files_recursive(root, &path, collected)?;
             continue;
         }
@@ -263,7 +276,11 @@ fn collect_profile_files_recursive(
         if path
             .file_name()
             .and_then(|name| name.to_str())
-            .is_some_and(|name| matches!(name, ".credential-bundle.json" | ".credentials.json"))
+            .is_some_and(|name| matches!(name,
+                ".credential-bundle.json" | ".credentials.json" |
+                "history.jsonl" | "stats-cache.json" | "mcp-needs-auth-cache.json" |
+                "settings.cp" | "settings.json.cp" | "settings.json.poe"
+            ))
         {
             continue;
         }
