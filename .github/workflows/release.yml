@@ -20,19 +20,19 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             archive_ext: tar.gz
-            bin_name: scodex
+            bin_name: sclaude
           - os: macos-14
             target: x86_64-apple-darwin
             archive_ext: tar.gz
-            bin_name: scodex
+            bin_name: sclaude
           - os: macos-14
             target: aarch64-apple-darwin
             archive_ext: tar.gz
-            bin_name: scodex
+            bin_name: sclaude
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             archive_ext: zip
-            bin_name: scodex.exe
+            bin_name: sclaude.exe
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
@@ -51,19 +51,19 @@ jobs:
         run: |
           mkdir -p dist
           cp target/${{ matrix.target }}/release/${{ matrix.bin_name }} dist/${{ matrix.bin_name }}
-          tar -C dist -czf scodex-${{ github.ref_name }}-${{ matrix.target }}.tar.gz ${{ matrix.bin_name }}
+          tar -C dist -czf sclaude-${{ github.ref_name }}-${{ matrix.target }}.tar.gz ${{ matrix.bin_name }}
       - name: Package archive (windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/${{ matrix.bin_name }}" "dist/${{ matrix.bin_name }}"
-          Compress-Archive -Path "dist/${{ matrix.bin_name }}" -DestinationPath "scodex-${{ github.ref_name }}-${{ matrix.target }}.zip"
+          Compress-Archive -Path "dist/${{ matrix.bin_name }}" -DestinationPath "sclaude-${{ github.ref_name }}-${{ matrix.target }}.zip"
       - name: Upload build artifact
         uses: actions/upload-artifact@v6
         with:
-          name: scodex-${{ matrix.target }}
-          path: scodex-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.archive_ext }}
+          name: sclaude-${{ matrix.target }}
+          path: sclaude-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.archive_ext }}
 
   publish:
     runs-on: ubuntu-latest
@@ -72,9 +72,9 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          pattern: scodex-*
+          pattern: sclaude-*
           path: artifacts
       - name: Publish GitHub release assets
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/**/scodex-*
+          files: artifacts/**/sclaude-*
