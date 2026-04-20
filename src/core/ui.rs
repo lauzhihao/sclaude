@@ -87,9 +87,9 @@ impl Messages {
 
     pub fn no_usable_account_hint(&self) -> &'static str {
         if self.is_zh() {
-            "没有可用账号，请先执行 `scodex add` 添加一个账号。"
+            "没有可用账号，请先执行 `sclaude add` 添加一个账号。"
         } else {
-            "No usable accounts found. Run `scodex add` to add one first."
+            "No usable accounts found. Run `sclaude add` to add one first."
         }
     }
 
@@ -182,12 +182,12 @@ impl Messages {
     pub fn update_completed(&self, previous: &str, installed: &str, path: &Path) -> String {
         if self.is_zh() {
             format!(
-                "已将 scodex 从 {previous} 更新到 {installed}，位置：{}",
+                "已将 sclaude 从 {previous} 更新到 {installed}，位置：{}",
                 path.display()
             )
         } else {
             format!(
-                "Updated scodex from {previous} to {installed} at {}",
+                "Updated sclaude from {previous} to {installed} at {}",
                 path.display()
             )
         }
@@ -257,9 +257,9 @@ impl Messages {
 
     pub fn login_start(&self) -> &'static str {
         if self.is_zh() {
-            "正在启动 `codex login --device-auth`。"
+            "正在启动 `claude auth login --claudeai`。"
         } else {
-            "Starting `codex login --device-auth`."
+            "Starting `claude auth login --claudeai`."
         }
     }
 
@@ -281,9 +281,9 @@ impl Messages {
 
     pub fn resume_session(&self) -> &'static str {
         if self.is_zh() {
-            "正在恢复当前目录的最新 Codex 会话。"
+            "正在恢复当前目录的最新 Claude 会话。"
         } else {
-            "Resuming latest Codex session for this directory."
+            "Resuming latest Claude session for this directory."
         }
     }
 
@@ -291,39 +291,39 @@ impl Messages {
         if self.is_zh() {
             "恢复会话未能正常完成，正在回退到新会话。"
         } else {
-            "Resume did not complete cleanly; falling back to a fresh Codex session."
+            "Resume did not complete cleanly; falling back to a fresh Claude session."
         }
     }
 
     pub fn fresh_session(&self) -> &'static str {
         if self.is_zh() {
-            "正在启动新的 Codex 会话。"
+            "正在启动新的 Claude 会话。"
         } else {
-            "Starting a fresh Codex session."
+            "Starting a fresh Claude session."
         }
     }
 
     pub fn missing_codex(&self) -> &'static str {
         if self.is_zh() {
-            "未找到 codex。这会导致 scodex 无法正常工作。"
+            "未找到 claude。这会导致 sclaude 无法正常工作。"
         } else {
-            "codex not found. This will cause scodex to behave incorrectly."
+            "claude not found. This will cause sclaude to behave incorrectly."
         }
     }
 
     pub fn install_hint(&self) -> &'static str {
         if self.is_zh() {
-            "你可以先运行下面的命令安装 Codex CLI："
+            "你可以先运行下面的命令安装 Claude Code CLI："
         } else {
-            "You can install Codex CLI by running:"
+            "You can install Claude Code CLI by running:"
         }
     }
 
     pub fn manual_install(&self) -> &'static str {
         if self.is_zh() {
-            "请先手动安装 Codex CLI，然后重新运行 scodex。"
+            "请先手动安装 Claude Code CLI，然后重新运行 sclaude。"
         } else {
-            "Please install Codex CLI manually and run scodex again."
+            "Please install Claude Code CLI manually and run sclaude again."
         }
     }
 
@@ -345,51 +345,51 @@ impl Messages {
 
     pub fn codex_install_still_missing(&self) -> &'static str {
         if self.is_zh() {
-            "Codex 安装似乎已完成，但当前仍然找不到 `codex`。请重启 shell，或显式设置 CODEX_BIN。"
+            "Claude Code CLI 安装似乎已完成，但当前仍然找不到 `claude`。请重启 shell，或显式设置 CLAUDE_BIN。"
         } else {
-            "Codex installation completed, but `codex` is still not available. Restart the shell or set CODEX_BIN explicitly."
+            "Claude Code CLI installation completed, but `claude` is still not available. Restart the shell or set CLAUDE_BIN explicitly."
         }
     }
 
     pub fn codex_install_failed(&self, status: i32) -> String {
         if self.is_zh() {
-            format!("Codex 安装失败，退出码：{status}")
+            format!("Claude Code CLI 安装失败，退出码：{status}")
         } else {
-            format!("Codex installation failed with status {status}")
+            format!("Claude Code CLI installation failed with status {status}")
         }
     }
 
     pub fn codex_install_tool_missing(&self, tool: &str) -> String {
         if self.is_zh() {
-            format!("未找到 {tool}。要自动安装 Codex CLI，当前机器需要先安装 Node.js/npm。")
+            format!("未找到 {tool}。要自动安装 Claude Code CLI，当前机器需要先安装 Node.js/npm。")
         } else {
             format!(
-                "{tool} not found. Install Node.js/npm first before trying to install Codex CLI automatically."
+                "{tool} not found. Install Node.js/npm first before trying to install Claude Code CLI automatically."
             )
         }
     }
 
     pub fn codex_login_failed(&self, status: i32) -> String {
         if self.is_zh() {
-            format!("codex 登录失败，退出码：{status}")
+            format!("claude 登录失败，退出码：{status}")
         } else {
-            format!("codex login failed with status {status}")
+            format!("claude auth login failed with status {status}")
         }
     }
 
     pub fn login_missing_auth(&self) -> &'static str {
         if self.is_zh() {
-            "登录流程已结束，但没有生成 auth.json。"
+            "登录流程已结束，但没有生成 Claude 登录配置。"
         } else {
-            "Login finished but no auth.json was produced."
+            "Login finished but no Claude auth profile was produced."
         }
     }
 
     pub fn login_autofill_start(&self) -> &'static str {
         if self.is_zh() {
-            "正在启动 `codex login` 并打开受控 Chrome 完成 OAuth 自动填充。"
+            "正在启动 Claude 登录兼容流程，并打开浏览器辅助完成登录。"
         } else {
-            "Starting `codex login` and opening a controlled Chrome window for OAuth auto-fill."
+            "Starting the Claude login compatibility flow and opening a browser-assisted login window."
         }
     }
 
@@ -404,33 +404,33 @@ impl Messages {
 
     pub fn login_autofill_waiting_consent(&self) -> &'static str {
         if self.is_zh() {
-            "OAuth 自动填充完成。请在刚打开的 Chrome 窗口里点一次 `Authorize` 完成登录。"
+            "登录信息已填充。请在刚打开的浏览器窗口里完成最后一次确认。"
         } else {
-            "OAuth auto-fill complete. Click `Authorize` once in the opened Chrome window to finish."
+            "Login details are filled in. Complete the final confirmation in the opened browser window."
         }
     }
 
     pub fn login_autofill_no_chrome(&self) -> &'static str {
         if self.is_zh() {
-            "未检测到 Chrome 或 Chromium，无法执行 OAuth 自动填充。请安装 Chrome，或改用 `scodex login`（不带 --oauth）。"
+            "未检测到 Chrome 或 Chromium，无法执行浏览器辅助登录。请安装 Chrome，或改用 `sclaude login`（不带 --oauth）。"
         } else {
-            "Chrome or Chromium not detected; cannot run OAuth auto-fill. Install Chrome or run `scodex login` without --oauth."
+            "Chrome or Chromium not detected; cannot run browser-assisted login. Install Chrome or run `sclaude login` without --oauth."
         }
     }
 
     pub fn login_autofill_missing_credentials(&self) -> &'static str {
         if self.is_zh() {
-            "使用 --oauth 时必须同时传入 --username 和 --password。"
+            "使用 --oauth 时至少需要传入 --username 作为 Claude 登录邮箱提示。"
         } else {
-            "--oauth requires both --username and --password."
+            "--oauth requires at least --username as the Claude login email hint."
         }
     }
 
     pub fn add_opening_signup(&self) -> &'static str {
         if self.is_zh() {
-            "正在打开 OpenAI 账号注册页。"
+            "正在打开 Claude 账号页面。"
         } else {
-            "Opening the OpenAI account signup page."
+            "Opening the Claude account page."
         }
     }
 
@@ -478,25 +478,25 @@ impl Messages {
 
     pub fn deploy_start(&self, target: &str) -> String {
         if self.is_zh() {
-            format!("正在把当前 Codex 凭证上传到 {target}")
+            format!("正在把当前 Claude 配置上传到 {target}")
         } else {
-            format!("Deploying the current Codex credential to {target}")
+            format!("Deploying the current Claude profile to {target}")
         }
     }
 
     pub fn deploy_completed(&self, target: &str) -> String {
         if self.is_zh() {
-            format!("已把当前 Codex 凭证上传到 {target}")
+            format!("已把当前 Claude 配置上传到 {target}")
         } else {
-            format!("Deployed the current Codex credential to {target}")
+            format!("Deployed the current Claude profile to {target}")
         }
     }
 
     pub fn deploy_missing_auth(&self, path: &Path) -> String {
         if self.is_zh() {
-            format!("当前可用的 auth.json 不存在：{}", path.display())
+            format!("当前可用的 Claude 配置目录不存在：{}", path.display())
         } else {
-            format!("Current auth.json not found: {}", path.display())
+            format!("Current Claude profile not found: {}", path.display())
         }
     }
 
@@ -510,17 +510,17 @@ impl Messages {
 
     pub fn deploy_missing_ssh(&self) -> &'static str {
         if self.is_zh() {
-            "未找到 ssh。执行 `scodex deploy` 需要它。"
+            "未找到 ssh。执行 `sclaude deploy` 需要它。"
         } else {
-            "ssh not found; `scodex deploy` requires it."
+            "ssh not found; `sclaude deploy` requires it."
         }
     }
 
     pub fn deploy_missing_scp(&self) -> &'static str {
         if self.is_zh() {
-            "未找到 scp。执行 `scodex deploy` 需要它。"
+            "未找到 scp。执行 `sclaude deploy` 需要它。"
         } else {
-            "scp not found; `scodex deploy` requires it."
+            "scp not found; `sclaude deploy` requires it."
         }
     }
 
@@ -551,11 +551,11 @@ impl Messages {
     pub fn repo_sync_missing_git(&self, install_command: &str) -> String {
         if self.is_zh() {
             format!(
-                "未找到 git。执行 `scodex push` 或 `scodex pull` 需要它。请先安装 git，例如：{install_command}"
+                "未找到 git。执行 `sclaude push` 或 `sclaude pull` 需要它。请先安装 git，例如：{install_command}"
             )
         } else {
             format!(
-                "git not found; `scodex push` and `scodex pull` require it. Install git first, for example: {install_command}"
+                "git not found; `sclaude push` and `sclaude pull` require it. Install git first, for example: {install_command}"
             )
         }
     }

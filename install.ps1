@@ -1,11 +1,13 @@
 $ErrorActionPreference = "Stop"
 
-$Repo = if ($env:AUTO_CODEX_REPO) { $env:AUTO_CODEX_REPO } else { "lauzhihao/scodex" }
+$Repo = if ($env:SCLAUDE_REPO) { $env:SCLAUDE_REPO } else { "lauzhihao/sclaude" }
 $InstallBin = if ($env:INSTALL_BIN) { $env:INSTALL_BIN } else { Join-Path $HOME ".local\bin" }
-$WrapperPath = Join-Path $InstallBin "scodex.exe"
-$CompatWrapperPath = Join-Path $InstallBin "auto-codex.exe"
-$OriginalWrapperPath = Join-Path $InstallBin "scodex-original.cmd"
-$Version = $env:AUTO_CODEX_VERSION
+$WrapperPath = Join-Path $InstallBin "sclaude.exe"
+$OpusPath = Join-Path $InstallBin "opus.exe"
+$SonnetPath = Join-Path $InstallBin "sonnet.exe"
+$HaikuPath = Join-Path $InstallBin "haiku.exe"
+$OriginalWrapperPath = Join-Path $InstallBin "sclaude-original.cmd"
+$Version = $env:SCLAUDE_VERSION
 
 function Resolve-Version {
   if ($Version) {
@@ -43,18 +45,21 @@ function Ensure-UserPath {
 function Install-OriginalWrapper {
   @"
 @echo off
-where codex >nul 2>nul
+where claude >nul 2>nul
 if %errorlevel% neq 0 (
-  echo codex not found on PATH. 1>&2
+  echo claude not found on PATH. 1>&2
   exit /b 1
 )
-codex %*
+claude %*
 "@ | Set-Content -Path $OriginalWrapperPath -Encoding ASCII
 }
 
 function Post-InstallImport {
-  $authPath = Join-Path $HOME ".codex\auth.json"
-  if (Test-Path $authPath) {
+  $authPath = Join-Path $HOME ".claude.json"
+  $altAuthPath = Join-Path $HOME ".config.json"
+  $profileAuthPath = Join-Path $HOME ".claude\.claude.json"
+  $profileAltAuthPath = Join-Path $HOME ".claude\.config.json"
+  if ((Test-Path $authPath) -or (Test-Path $altAuthPath) -or (Test-Path $profileAuthPath) -or (Test-Path $profileAltAuthPath)) {
     & $WrapperPath import-known | Out-Null
     & $WrapperPath refresh | Out-Null
   }
@@ -62,9 +67,9 @@ function Post-InstallImport {
 
 $target = Resolve-Target
 $version = Resolve-Version
-$asset = "scodex-$version-$target.zip"
+$asset = "sclaude-$version-$target.zip"
 $url = "https://github.com/$Repo/releases/download/$version/$asset"
-$tmp = Join-Path ([IO.Path]::GetTempPath()) ("scodex-install-" + [guid]::NewGuid())
+$tmp = Join-Path ([IO.Path]::GetTempPath()) ("sclaude-install-" + [guid]::NewGuid())
 New-Item -ItemType Directory -Path $tmp | Out-Null
 New-Item -ItemType Directory -Path $InstallBin -Force | Out-Null
 
@@ -72,18 +77,20 @@ $archivePath = Join-Path $tmp $asset
 Invoke-WebRequest -Uri $url -OutFile $archivePath
 Expand-Archive -Path $archivePath -DestinationPath $tmp -Force
 
-$binaryPath = Join-Path $tmp "scodex.exe"
+$binaryPath = Join-Path $tmp "sclaude.exe"
 if (-not (Test-Path $binaryPath)) {
-  throw "Release archive did not contain scodex.exe"
+  throw "Release archive did not contain sclaude.exe"
 }
 
 Copy-Item $binaryPath $WrapperPath -Force
-Copy-Item $binaryPath $CompatWrapperPath -Force
+Copy-Item $binaryPath $OpusPath -Force
+Copy-Item $binaryPath $SonnetPath -Force
+Copy-Item $binaryPath $HaikuPath -Force
 Install-OriginalWrapper
 Ensure-UserPath
 Post-InstallImport
 
 Write-Host "Installed to $WrapperPath"
-Write-Host "Installed compatibility command to $CompatWrapperPath"
+Write-Host "Installed model entrypoints to $OpusPath, $SonnetPath, $HaikuPath"
 Write-Host "Installed passthrough helper to $OriginalWrapperPath"
-Write-Host "If the current shell cannot find scodex yet, restart PowerShell or open a new terminal."
+Write-Host "If the current shell cannot find sclaude yet, restart PowerShell or open a new terminal."

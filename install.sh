@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO="${AUTO_CODEX_REPO:-lauzhihao/scodex}"
+REPO="${SCLAUDE_REPO:-lauzhihao/sclaude}"
 INSTALL_BIN="${INSTALL_BIN:-$HOME/.local/bin}"
-WRAPPER_PATH="${INSTALL_BIN}/scodex"
-COMPAT_WRAPPER_PATH="${INSTALL_BIN}/auto-codex"
-ORIGINAL_WRAPPER_PATH="${INSTALL_BIN}/scodex-original"
-VERSION="${AUTO_CODEX_VERSION:-}"
+WRAPPER_PATH="${INSTALL_BIN}/sclaude"
+OPUS_PATH="${INSTALL_BIN}/opus"
+SONNET_PATH="${INSTALL_BIN}/sonnet"
+HAIKU_PATH="${INSTALL_BIN}/haiku"
+ORIGINAL_WRAPPER_PATH="${INSTALL_BIN}/sclaude-original"
+VERSION="${SCLAUDE_VERSION:-}"
 
 need_cmd() {
   command -v "$1" >/dev/null 2>&1
@@ -77,9 +79,9 @@ download_and_install() {
   local version target asset url tmp_dir cleanup_dir archive_path extracted_path
   version="$1"
   target="$2"
-  asset="scodex-${version}-${target}.tar.gz"
+  asset="sclaude-${version}-${target}.tar.gz"
   url="https://github.com/${REPO}/releases/download/${version}/${asset}"
-  tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/scodex-install.XXXXXX")"
+  tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/sclaude-install.XXXXXX")"
   cleanup_dir="${tmp_dir}"
   trap 'rm -rf -- "'"${cleanup_dir}"'"' EXIT
   archive_path="${tmp_dir}/${asset}"
@@ -89,49 +91,51 @@ download_and_install() {
 
   mkdir -p "${INSTALL_BIN}"
   tar -xzf "${archive_path}" -C "${tmp_dir}"
-  extracted_path="${tmp_dir}/scodex"
+  extracted_path="${tmp_dir}/sclaude"
   if [[ ! -f "${extracted_path}" ]]; then
-    echo "Release archive did not contain a top-level scodex binary." >&2
+    echo "Release archive did not contain a top-level sclaude binary." >&2
     exit 1
   fi
 
   install -m 0755 "${extracted_path}" "${WRAPPER_PATH}"
-  cp "${WRAPPER_PATH}" "${COMPAT_WRAPPER_PATH}"
+  cp "${WRAPPER_PATH}" "${OPUS_PATH}"
+  cp "${WRAPPER_PATH}" "${SONNET_PATH}"
+  cp "${WRAPPER_PATH}" "${HAIKU_PATH}"
 }
 
 install_original_wrapper() {
   cat > "${ORIGINAL_WRAPPER_PATH}" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-if command -v codex >/dev/null 2>&1; then
-  exec "$(command -v codex)" "$@"
+if command -v claude >/dev/null 2>&1; then
+  exec "$(command -v claude)" "$@"
 fi
-echo "codex not found on PATH." >&2
+echo "claude not found on PATH." >&2
 exit 1
 EOF
   chmod 0755 "${ORIGINAL_WRAPPER_PATH}"
 }
 
 post_install_import() {
-  if [[ -f "${HOME}/.codex/auth.json" ]]; then
+  if [[ -f "${HOME}/.claude.json" || -f "${HOME}/.config.json" || -f "${HOME}/.claude/.claude.json" || -f "${HOME}/.claude/.config.json" ]]; then
     if "${WRAPPER_PATH}" import-known >/dev/null 2>&1; then
-      echo "Imported ${HOME}/.codex/auth.json into scodex state."
+      echo "Imported current Claude profile into sclaude state."
       if "${WRAPPER_PATH}" refresh >/dev/null 2>&1; then
-        echo "Refreshed scodex usage cache."
+        echo "Refreshed sclaude login status cache."
       else
-        echo "Imported auth.json, but refreshing usage cache failed." >&2
+        echo "Imported profile, but refreshing status cache failed." >&2
       fi
     else
-      echo "Installed scodex, but importing ${HOME}/.codex/auth.json failed." >&2
+      echo "Installed sclaude, but importing the current Claude profile failed." >&2
     fi
   else
-    echo "No ${HOME}/.codex/auth.json found; skipped import."
+    echo "No Claude login state found under \$HOME/.claude or \$HOME/*.json; skipped import."
   fi
 }
 
 print_next_steps() {
   echo "Installed to ${WRAPPER_PATH}"
-  echo "Installed compatibility command to ${COMPAT_WRAPPER_PATH}"
+  echo "Installed model entrypoints to ${OPUS_PATH}, ${SONNET_PATH}, ${HAIKU_PATH}"
   echo "Installed passthrough helper to ${ORIGINAL_WRAPPER_PATH}"
   if [[ ":$PATH:" != *":${INSTALL_BIN}:"* ]]; then
     echo

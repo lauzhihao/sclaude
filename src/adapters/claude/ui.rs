@@ -4,11 +4,11 @@ use std::io::{self, IsTerminal};
 use chrono::{DateTime, Local, Utc};
 use unicode_width::UnicodeWidthStr;
 
-use super::CodexAdapter;
+use super::ClaudeAdapter;
 use crate::core::state::{LiveIdentity, State, UsageSnapshot};
 use crate::core::ui as core_ui;
 
-impl CodexAdapter {
+impl ClaudeAdapter {
     pub fn render_account_table(&self, state: &State, active: Option<&LiveIdentity>) -> String {
         let ui = core_ui::messages();
         if state.accounts.is_empty() {
@@ -260,7 +260,7 @@ fn style_text(value: &str, style: AnsiStyle) -> String {
 #[cfg(test)]
 mod tests {
     use super::{render_table, strip_ansi_codes, visible_width};
-    use crate::adapters::codex::CodexAdapter;
+    use crate::adapters::claude::ClaudeAdapter;
     use crate::core::state::{AccountRecord, State, UsageSnapshot};
 
     #[test]
@@ -294,7 +294,7 @@ mod tests {
 
     #[test]
     fn render_account_table_returns_empty_state_message_without_accounts() {
-        let adapter = CodexAdapter;
+        let adapter = ClaudeAdapter;
         let rendered = adapter.render_account_table(&State::default(), None);
         assert_eq!(
             rendered,
@@ -304,7 +304,7 @@ mod tests {
 
     #[test]
     fn render_account_table_returns_empty_state_message_when_no_account_is_usable() {
-        let adapter = CodexAdapter;
+        let adapter = ClaudeAdapter;
         let mut state = State::default();
         state.accounts.push(AccountRecord {
             id: "acct-1".into(),
@@ -329,7 +329,7 @@ mod tests {
 
     #[test]
     fn render_account_table_places_summary_inside_table_footer() {
-        let adapter = CodexAdapter;
+        let adapter = ClaudeAdapter;
         let mut state = State::default();
         state.accounts.push(AccountRecord {
             id: "acct-1".into(),

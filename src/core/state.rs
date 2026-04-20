@@ -20,6 +20,8 @@ pub struct AccountRecord {
     #[serde(default)]
     pub config_path: Option<String>,
     #[serde(default)]
+    pub credential_bundle_key: Option<String>,
+    #[serde(default)]
     pub added_at: i64,
     #[serde(default)]
     pub updated_at: i64,
@@ -61,6 +63,8 @@ pub struct State {
     pub accounts: Vec<AccountRecord>,
     #[serde(default)]
     pub usage_cache: std::collections::BTreeMap<String, UsageSnapshot>,
+    #[serde(default)]
+    pub current_account_id: Option<String>,
 }
 
 impl Default for State {
@@ -69,6 +73,7 @@ impl Default for State {
             version: STATE_VERSION,
             accounts: Vec::new(),
             usage_cache: std::collections::BTreeMap::new(),
+            current_account_id: None,
         }
     }
 }

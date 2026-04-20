@@ -1,10 +1,26 @@
 [package]
-name = "scodex"
-version = "0.1.14"
+name = "sclaude"
+version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT"
-description = "Cross-platform account-aware launcher for agent CLIs."
+description = "Cross-platform account-aware launcher for Claude Code model entrypoints."
+
+[[bin]]
+name = "sclaude"
+path = "src/main.rs"
+
+[[bin]]
+name = "opus"
+path = "src/main.rs"
+
+[[bin]]
+name = "sonnet"
+path = "src/main.rs"
+
+[[bin]]
+name = "haiku"
+path = "src/main.rs"
 
 [dependencies]
 anyhow = "1.0"
@@ -24,3 +40,6 @@ tungstenite = { version = "0.24", default-features = false, features = ["handsha
 unicode-width = "0.2"
 uuid = { version = "1.18", features = ["v4"] }
 zip = { version = "2.2", default-features = false, features = ["deflate"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3"

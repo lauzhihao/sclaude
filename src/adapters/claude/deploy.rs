@@ -6,15 +6,21 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 use uuid::Uuid;
 
-use super::CodexAdapter;
-use super::paths::{codex_home, find_program};
+use super::ClaudeAdapter;
+use super::paths::{find_program, profile_root_for_account};
+use crate::core::state::AccountRecord;
 use crate::core::storage;
 use crate::core::ui as core_ui;
 
-impl CodexAdapter {
-    pub fn deploy_live_auth(&self, target: &str, identity_file: Option<&Path>) -> Result<()> {
+impl ClaudeAdapter {
+    pub fn deploy_live_auth(
+        &self,
+        account: &AccountRecord,
+        target: &str,
+        identity_file: Option<&Path>,
+    ) -> Result<()> {
         let ui = core_ui::messages();
-        let source = codex_home().join("auth.json");
+        let source = profile_root_for_account(account);
         if !source.exists() {
             bail!("{}", ui.deploy_missing_auth(&source));
         }
@@ -54,6 +60,7 @@ impl CodexAdapter {
             let scp_status = Command::new(&scp_bin)
                 .args(master.base_args())
                 .args(identity_arg(identity_file))
+                .arg("-r")
                 .arg(&source)
                 .arg(remote.scp_destination())
                 .status()
@@ -74,16 +81,16 @@ impl CodexAdapter {
 struct RemoteDeployTarget {
     host: String,
     remote_dir: String,
-    remote_file: String,
+    remote_path: String,
 }
 
 impl RemoteDeployTarget {
     fn display_target(&self) -> String {
-        format!("{}:{}", self.host, self.remote_file)
+        format!("{}:{}", self.host, self.remote_path)
     }
 
     fn scp_destination(&self) -> String {
-        format!("{}:{}", self.host, shell_single_quote(&self.remote_file))
+        format!("{}:{}", self.host, shell_single_quote(&self.remote_path))
     }
 }
 
@@ -162,37 +169,21 @@ fn parse_remote_deploy_target(target: &str) -> Result<RemoteDeployTarget> {
         bail!("{}", ui.deploy_invalid_target(target));
     };
     let host = host.trim();
-    let raw_path = raw_path.trim();
+    let raw_path = raw_path.trim().trim_end_matches('/');
     if host.is_empty() || raw_path.is_empty() {
         bail!("{}", ui.deploy_invalid_target(target));
     }
 
-    let remote_file = normalize_remote_auth_file(raw_path);
-    let remote_dir = remote_parent_dir(&remote_file);
-
+    let remote_dir = remote_parent_dir(raw_path);
     Ok(RemoteDeployTarget {
         host: host.to_string(),
         remote_dir,
-        remote_file,
+        remote_path: raw_path.to_string(),
     })
 }
 
-fn normalize_remote_auth_file(path: &str) -> String {
-    let trimmed = path.trim();
-    if trimmed.ends_with("/auth.json") || trimmed == "auth.json" {
-        return trimmed.to_string();
-    }
-    let base = trimmed.trim_end_matches('/');
-    if base.is_empty() {
-        "auth.json".into()
-    } else {
-        format!("{base}/auth.json")
-    }
-}
-
 fn remote_parent_dir(path: &str) -> String {
-    let trimmed = path.trim();
-    if let Some((parent, _)) = trimmed.rsplit_once('/') {
+    if let Some((parent, _)) = path.rsplit_once('/') {
         if parent.is_empty() {
             "/".into()
         } else {
@@ -216,64 +207,32 @@ fn with_ssh_master_connection<F>(
 where
     F: FnOnce(&SshMasterConnection) -> Result<()>,
 {
-    let temp_root = env::temp_dir().join(format!("scodex-ssh-{}", Uuid::new_v4()));
+    let temp_root = env::temp_dir().join(format!("sclaude-ssh-{}", Uuid::new_v4()));
     fs::create_dir_all(&temp_root)
         .with_context(|| format!("failed to create {}", temp_root.display()))?;
-    let control_path = temp_root.join("mux");
-    let master = SshMasterConnection {
+    let control_path = temp_root.join("control");
+    let connection = SshMasterConnection {
         ssh_bin: ssh_bin.to_path_buf(),
         host: host.to_string(),
         control_path,
     };
 
     let establish = Command::new(ssh_bin)
-        .args(master.base_args())
+        .args(connection.base_args())
         .args(identity_arg(identity_file))
-        .arg("-Nf")
+        .arg("-MNf")
         .arg(host)
         .status()
         .with_context(|| format!("failed to execute {}", ssh_bin.display()));
 
-    let result = match establish {
-        Ok(status) if status.success() => f(&master),
-        Ok(_) | Err(_) => f(&master.without_control()),
+    let connection = if matches!(establish.as_ref().map(|status| status.success()), Ok(true)) {
+        connection
+    } else {
+        connection.without_control()
     };
 
-    let _ = master.close(identity_file);
+    let result = f(&connection);
+    let _ = connection.close(identity_file);
     let _ = fs::remove_dir_all(&temp_root);
     result
-}
-
-#[cfg(test)]
-mod tests {
-    use anyhow::Result;
-
-    use super::{normalize_remote_auth_file, parse_remote_deploy_target, remote_parent_dir};
-
-    #[test]
-    fn deploy_target_directory_appends_auth_json() -> Result<()> {
-        let target = parse_remote_deploy_target("user@example.com:/srv/codex")?;
-        assert_eq!(target.host, "user@example.com");
-        assert_eq!(target.remote_dir, "/srv/codex");
-        assert_eq!(target.remote_file, "/srv/codex/auth.json");
-        Ok(())
-    }
-
-    #[test]
-    fn deploy_target_exact_file_is_preserved() -> Result<()> {
-        let target = parse_remote_deploy_target("root@host:/srv/codex/auth.json")?;
-        assert_eq!(target.remote_dir, "/srv/codex");
-        assert_eq!(target.remote_file, "/srv/codex/auth.json");
-        Ok(())
-    }
-
-    #[test]
-    fn deploy_target_helpers_handle_relative_paths() {
-        assert_eq!(
-            normalize_remote_auth_file("codex-home"),
-            "codex-home/auth.json"
-        );
-        assert_eq!(normalize_remote_auth_file("auth.json"), "auth.json");
-        assert_eq!(remote_parent_dir("auth.json"), ".");
-    }
 }

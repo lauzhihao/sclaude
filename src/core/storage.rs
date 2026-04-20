@@ -7,15 +7,15 @@ use directories::BaseDirs;
 
 use crate::core::state::State;
 
-const DEFAULT_STATE_BASENAME: &str = "auto-codex";
-const LEGACY_STATE_BASENAME: &str = "codex-autoswitch";
+const DEFAULT_STATE_BASENAME: &str = "sclaude";
+const LEGACY_STATE_BASENAME: &str = "auto-codex";
 
 pub fn resolve_state_dir(override_dir: Option<&Path>) -> Result<PathBuf> {
     if let Some(path) = override_dir {
         return Ok(expand_user_path(path));
     }
 
-    for env_name in ["AUTO_CODEX_HOME", "CODEX_AUTOSWITCH_HOME"] {
+    for env_name in ["SCLAUDE_HOME", "AUTO_CODEX_HOME", "CODEX_AUTOSWITCH_HOME"] {
         if let Some(value) = env::var_os(env_name) {
             return Ok(expand_user_path(Path::new(&value)));
         }
@@ -65,8 +65,12 @@ fn normalize_state_account_paths(state_dir: &Path, state: &mut State) -> bool {
 
     for account in &mut state.accounts {
         let canonical_home = accounts_dir.join(&account.id);
-        let canonical_auth = canonical_home.join("auth.json");
-        let canonical_config = canonical_home.join("config.toml");
+        let canonical_auth = canonical_home.join(".claude.json");
+        let canonical_config = canonical_home.clone();
+        if account.credential_bundle_key.is_none() && !account.id.is_empty() {
+            account.credential_bundle_key = Some(format!("claude-bundle-{}", account.id));
+            changed = true;
+        }
 
         if canonical_auth.exists() {
             let canonical_auth_str = canonical_auth.to_string_lossy().into_owned();

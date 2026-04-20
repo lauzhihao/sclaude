@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-pub mod codex;
+pub mod claude;
 
 #[derive(Debug, Clone, Copy)]
 pub struct AdapterCapabilities {

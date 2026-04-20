@@ -12,7 +12,7 @@ use tar::Archive;
 use uuid::Uuid;
 use zip::ZipArchive;
 
-const DEFAULT_REPO: &str = "lauzhihao/scodex";
+const DEFAULT_REPO: &str = "lauzhihao/sclaude";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReleaseTarget {
@@ -63,7 +63,7 @@ pub fn self_update(force: bool) -> Result<UpdateOutcome> {
     }
 
     let binary = download_release_binary(&asset)?;
-    let temp_dir = env::temp_dir().join(format!("scodex-update-{}", Uuid::new_v4()));
+    let temp_dir = env::temp_dir().join(format!("sclaude-update-{}", Uuid::new_v4()));
     fs::create_dir_all(&temp_dir)
         .with_context(|| format!("failed to create {}", temp_dir.display()))?;
     let temp_binary = temp_dir.join(binary_filename_for_current_platform());
@@ -96,8 +96,12 @@ pub fn self_update(force: bool) -> Result<UpdateOutcome> {
 }
 
 fn resolve_release_asset() -> Result<ReleaseAsset> {
-    let repo = env::var("AUTO_CODEX_REPO").unwrap_or_else(|_| DEFAULT_REPO.to_string());
-    let tag = if let Ok(value) = env::var("AUTO_CODEX_VERSION") {
+    let repo = env::var("SCLAUDE_REPO")
+        .or_else(|_| env::var("AUTO_CODEX_REPO"))
+        .unwrap_or_else(|_| DEFAULT_REPO.to_string());
+    let tag = if let Ok(value) =
+        env::var("SCLAUDE_VERSION").or_else(|_| env::var("AUTO_CODEX_VERSION"))
+    {
         normalize_tag(&value)
     } else {
         fetch_latest_release_tag(&repo)?
@@ -115,7 +119,7 @@ fn resolve_release_asset() -> Result<ReleaseAsset> {
 
 fn fetch_latest_release_tag(repo: &str) -> Result<String> {
     let mut headers = HeaderMap::new();
-    headers.insert(USER_AGENT, HeaderValue::from_static("scodex"));
+    headers.insert(USER_AGENT, HeaderValue::from_static("sclaude"));
     headers.insert(
         ACCEPT,
         HeaderValue::from_static("application/vnd.github+json"),
@@ -135,7 +139,7 @@ fn fetch_latest_release_tag(repo: &str) -> Result<String> {
 
 fn download_release_binary(asset: &ReleaseAsset) -> Result<Vec<u8>> {
     let mut headers = HeaderMap::new();
-    headers.insert(USER_AGENT, HeaderValue::from_static("scodex"));
+    headers.insert(USER_AGENT, HeaderValue::from_static("sclaude"));
     let client = Client::builder().default_headers(headers).build()?;
     let bytes = client
         .get(asset.download_url())
@@ -162,25 +166,25 @@ fn extract_binary_from_tar_gz(bytes: &[u8]) -> Result<Vec<u8>> {
     {
         let mut entry = entry.context("failed to read tar archive entry")?;
         let path = entry.path().context("failed to read tar entry path")?;
-        if path.as_ref() == Path::new("scodex") {
+        if path.as_ref() == Path::new("sclaude") {
             let mut contents = Vec::new();
             entry
                 .read_to_end(&mut contents)
-                .context("failed to extract scodex from tar archive")?;
+                .context("failed to extract sclaude from tar archive")?;
             return Ok(contents);
         }
     }
-    bail!("release archive did not contain scodex")
+    bail!("release archive did not contain sclaude")
 }
 
 fn extract_binary_from_zip(bytes: &[u8]) -> Result<Vec<u8>> {
     let mut archive = ZipArchive::new(Cursor::new(bytes)).context("failed to open zip archive")?;
     let mut file = archive
-        .by_name("scodex.exe")
-        .context("release archive did not contain scodex.exe")?;
+        .by_name("sclaude.exe")
+        .context("release archive did not contain sclaude.exe")?;
     let mut contents = Vec::new();
     file.read_to_end(&mut contents)
-        .context("failed to extract scodex.exe from zip archive")?;
+        .context("failed to extract sclaude.exe from zip archive")?;
     Ok(contents)
 }
 
@@ -253,24 +257,24 @@ fn strip_tag_prefix(value: &str) -> &str {
 
 fn binary_filename_for_current_platform() -> &'static str {
     if cfg!(windows) {
-        "scodex.exe"
+        "sclaude.exe"
     } else {
-        "scodex"
+        "sclaude"
     }
 }
 
 fn compatibility_binary_names() -> &'static [&'static str] {
     if cfg!(windows) {
-        &["auto-codex.exe"]
+        &["opus.exe", "sonnet.exe", "haiku.exe"]
     } else {
-        &["auto-codex"]
+        &["opus", "sonnet", "haiku"]
     }
 }
 
 impl ReleaseAsset {
     pub fn asset_name(&self) -> String {
         format!(
-            "scodex-{}-{}.{}",
+            "sclaude-{}-{}.{}",
             self.tag, self.target.triple, self.target.archive_ext
         )
     }
@@ -316,7 +320,7 @@ mod tests {
     #[test]
     fn release_asset_url_matches_installer_naming() {
         let asset = ReleaseAsset {
-            repo: "lauzhihao/scodex".into(),
+            repo: "lauzhihao/sclaude".into(),
             tag: "v1.2.3".into(),
             version: "1.2.3".into(),
             target: ReleaseTarget {
@@ -327,11 +331,11 @@ mod tests {
 
         assert_eq!(
             asset.asset_name(),
-            "scodex-v1.2.3-x86_64-unknown-linux-musl.tar.gz"
+            "sclaude-v1.2.3-x86_64-unknown-linux-musl.tar.gz"
         );
         assert_eq!(
             asset.download_url(),
-            "https://github.com/lauzhihao/scodex/releases/download/v1.2.3/scodex-v1.2.3-x86_64-unknown-linux-musl.tar.gz"
+            "https://github.com/lauzhihao/sclaude/releases/download/v1.2.3/sclaude-v1.2.3-x86_64-unknown-linux-musl.tar.gz"
         );
     }
 }

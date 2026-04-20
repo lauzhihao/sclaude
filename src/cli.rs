@@ -6,14 +6,14 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
 
-use crate::adapters::codex::{AutofillRequest, CodexAdapter};
+use crate::adapters::claude::{AutofillRequest, ClaudeAdapter};
 use crate::core::state::{AccountRecord, UsageSnapshot};
 use crate::core::storage;
 use crate::core::ui;
 use crate::core::update;
 
 #[derive(Debug, Parser)]
-#[command(name = "scodex")]
+#[command(name = "sclaude")]
 pub struct Cli {
     #[arg(long)]
     pub state_dir: Option<PathBuf>,
@@ -96,7 +96,11 @@ pub struct DeployArgs {
 
 #[derive(Debug, Args)]
 pub struct RepoSyncArgs {
-    #[arg(long, default_value = ".scodex-account-pool", value_name = "REPO_PATH")]
+    #[arg(
+        long,
+        default_value = ".sclaude-account-pool",
+        value_name = "REPO_PATH"
+    )]
     pub path: String,
 
     #[arg(short = 'i', value_name = "IDENTITY_FILE")]
@@ -141,7 +145,7 @@ impl Cli {
 
 pub fn run(cli: Cli) -> Result<i32> {
     let ui = ui::messages();
-    let adapter = CodexAdapter::default();
+    let adapter = ClaudeAdapter::default();
     let state_dir = storage::resolve_state_dir(cli.state_dir.as_deref())?;
     let mut state = storage::load_state(&state_dir)?;
     let command = cli.command.unwrap_or(Command::Launch(LaunchArgs {
@@ -173,7 +177,7 @@ pub fn run(cli: Cli) -> Result<i32> {
                         if args.no_launch {
                             0
                         } else {
-                            adapter.launch_codex(&args.extra_args, !args.no_resume)?
+                            adapter.launch_claude(&account, &args.extra_args, !args.no_resume)?
                         }
                     }
                 }
@@ -213,11 +217,12 @@ pub fn run(cli: Cli) -> Result<i32> {
                 let request = build_autofill_request(&args, &ui)?;
                 adapter.run_device_auth_login_autofill(&state_dir, &mut state, request)?
             } else {
-                adapter.run_device_auth_login(&state_dir, &mut state)?
+                adapter.run_interactive_login(&state_dir, &mut state, args.username.as_deref())?
             };
             let usage = adapter.refresh_account_usage(&mut state, &record);
             println!("{}", ui.added_account(&record.email));
             adapter.switch_account(&record)?;
+            state.current_account_id = Some(record.id.clone());
             print_selection(ui.selection_switched(), &record, &usage);
             storage::save_state(&state_dir, &state)?;
             0
@@ -228,6 +233,7 @@ pub fn run(cli: Cli) -> Result<i32> {
             println!("{}", ui.added_account(&record.email));
             if args.switch {
                 adapter.switch_account(&record)?;
+                state.current_account_id = Some(record.id.clone());
                 print_selection(ui.selection_switched(), &record, &usage);
             }
             storage::save_state(&state_dir, &state)?;
@@ -235,18 +241,19 @@ pub fn run(cli: Cli) -> Result<i32> {
         }
         Command::Use(args) => {
             adapter.import_known_sources(&state_dir, &mut state);
-            let Some(record) = adapter.find_account_by_email(&state, &args.email) else {
+            let Some(record) = adapter.find_account_by_email(&state, &args.email).cloned() else {
                 println!("{}", ui.unknown_account(&args.email));
                 storage::save_state(&state_dir, &state)?;
                 return Ok(1);
             };
-            adapter.switch_account(record)?;
+            adapter.switch_account(&record)?;
+            state.current_account_id = Some(record.id.clone());
             let usage = state
                 .usage_cache
                 .get(&record.id)
                 .cloned()
                 .unwrap_or_default();
-            print_selection(ui.selection_switched(), record, &usage);
+            print_selection(ui.selection_switched(), &record, &usage);
             storage::save_state(&state_dir, &state)?;
             0
         }
@@ -271,7 +278,7 @@ pub fn run(cli: Cli) -> Result<i32> {
                     let _ = io::stdout().flush();
                     let mut line = String::new();
                     io::stdin().read_line(&mut line)?;
-                    match crate::adapters::codex::parse_yes_no(&line) {
+                    match crate::adapters::claude::parse_yes_no(&line) {
                         Some(true) => break,
                         Some(false) => {
                             println!("{}", ui.rm_cancelled());
@@ -287,7 +294,21 @@ pub fn run(cli: Cli) -> Result<i32> {
             0
         }
         Command::Deploy(args) => {
-            adapter.deploy_live_auth(&args.target, args.identity_file.as_deref())?;
+            let Some(account_id) = state.current_account_id.as_ref() else {
+                println!("{}", ui.no_usable_account());
+                storage::save_state(&state_dir, &state)?;
+                return Ok(1);
+            };
+            let Some(account) = state
+                .accounts
+                .iter()
+                .find(|account| &account.id == account_id)
+            else {
+                println!("{}", ui.no_usable_account());
+                storage::save_state(&state_dir, &state)?;
+                return Ok(1);
+            };
+            adapter.deploy_live_auth(account, &args.target, args.identity_file.as_deref())?;
             0
         }
         Command::Push(args) => {
@@ -322,21 +343,21 @@ pub fn run(cli: Cli) -> Result<i32> {
             );
             adapter.refresh_all_accounts(&mut state);
             storage::save_state(&state_dir, &state)?;
-            let active = adapter.read_live_identity();
+            let active = adapter.active_identity_from_state(&state);
             println!("{}", adapter.render_account_table(&state, active.as_ref()));
             0
         }
         Command::List => {
             adapter.refresh_all_accounts(&mut state);
             storage::save_state(&state_dir, &state)?;
-            let active = adapter.read_live_identity();
+            let active = adapter.active_identity_from_state(&state);
             println!("{}", adapter.render_account_table(&state, active.as_ref()));
             0
         }
         Command::Refresh => {
             adapter.refresh_all_accounts(&mut state);
             storage::save_state(&state_dir, &state)?;
-            let active = adapter.read_live_identity();
+            let active = adapter.active_identity_from_state(&state);
             println!("{}", adapter.render_account_table(&state, active.as_ref()));
             println!("{}", ui.refreshed_accounts(state.accounts.len()));
             0
@@ -371,6 +392,9 @@ pub fn run(cli: Cli) -> Result<i32> {
         }
         Command::ImportAuth(args) => {
             let record = adapter.import_auth_path(&state_dir, &mut state, &args.path)?;
+            if state.current_account_id.is_none() {
+                state.current_account_id = Some(record.id.clone());
+            }
             storage::save_state(&state_dir, &state)?;
             println!("{}", ui.imported_account(&record.email, &record.id));
             0
@@ -381,6 +405,9 @@ pub fn run(cli: Cli) -> Result<i32> {
                 println!("{}", ui.no_importable_accounts());
                 storage::save_state(&state_dir, &state)?;
                 return Ok(1);
+            }
+            if state.current_account_id.is_none() {
+                state.current_account_id = Some(imported[0].id.clone());
             }
             storage::save_state(&state_dir, &state)?;
             for account in imported {
@@ -393,7 +420,7 @@ pub fn run(cli: Cli) -> Result<i32> {
                 Some((account, usage)) => {
                     print_selection(ui.selection_switched(), &account, &usage);
                     storage::save_state(&state_dir, &state)?;
-                    adapter.run_passthrough(&args)?
+                    adapter.run_passthrough(&account, &args)?
                 }
                 None => {
                     println!("{}", ui.no_usable_account());
@@ -415,13 +442,11 @@ fn format_percent(value: Option<i64>) -> String {
 }
 
 fn build_autofill_request(args: &LoginArgs, ui: &ui::Messages) -> Result<AutofillRequest> {
-    match (args.username.as_deref(), args.password.as_deref()) {
-        (Some(email), Some(password)) if !email.trim().is_empty() && !password.is_empty() => {
-            Ok(AutofillRequest {
-                email: email.trim().to_string(),
-                password: password.to_string(),
-            })
-        }
+    match args.username.as_deref() {
+        Some(email) if !email.trim().is_empty() => Ok(AutofillRequest {
+            email: email.trim().to_string(),
+            password: args.password.clone().unwrap_or_default(),
+        }),
         _ => anyhow::bail!("{}", ui.login_autofill_missing_credentials()),
     }
 }
@@ -522,17 +547,17 @@ fn render_help_en(topic: HelpTopic) -> String {
             writeln!(&mut out, "{}", ui::messages().cli_about()).unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "Usage:").unwrap();
-            writeln!(&mut out, "  scodex [OPTIONS] [COMMAND]").unwrap();
+            writeln!(&mut out, "  sclaude [OPTIONS] [COMMAND]").unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "Commands:").unwrap();
             writeln!(
                 &mut out,
-                "  launch       Switch to the best account and launch or resume Codex"
+                "  launch       Switch to the best account and launch or resume Claude"
             )
             .unwrap();
             writeln!(
                 &mut out,
-                "  auto         Switch to the best account without launching Codex"
+                "  auto         Switch to the best account without launching Claude"
             )
             .unwrap();
             writeln!(
@@ -542,12 +567,12 @@ fn render_help_en(topic: HelpTopic) -> String {
             .unwrap();
             writeln!(
                 &mut out,
-                "  login        Add one account through device auth"
+                "  login        Add one account through Claude login"
             )
             .unwrap();
             writeln!(
                 &mut out,
-                "  deploy       Copy the current auth.json to a remote machine [alias: sync]"
+                "  deploy       Copy the current Claude profile to a remote machine [alias: sync]"
             )
             .unwrap();
             writeln!(
@@ -574,12 +599,12 @@ fn render_help_en(topic: HelpTopic) -> String {
             .unwrap();
             writeln!(
                 &mut out,
-                "  update       Self-update scodex [alias: upgrade]"
+                "  update       Self-update sclaude [alias: upgrade]"
             )
             .unwrap();
             writeln!(
                 &mut out,
-                "  import-auth  Import an auth.json file or home directory"
+                "  import-auth  Import a Claude auth file or profile directory"
             )
             .unwrap();
             writeln!(
@@ -603,7 +628,7 @@ fn render_help_en(topic: HelpTopic) -> String {
         }
         HelpTopic::Launch => {
             writeln!(&mut out, "Usage:").unwrap();
-            writeln!(&mut out, "  scodex launch [OPTIONS] [<codex args...>]").unwrap();
+            writeln!(&mut out, "  sclaude launch [OPTIONS] [<claude args...>]").unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "Options:").unwrap();
             writeln!(
@@ -613,7 +638,7 @@ fn render_help_en(topic: HelpTopic) -> String {
             .unwrap();
             writeln!(
                 &mut out,
-                "      --no-login         Do not start device auth when no usable account exists"
+                "      --no-login         Do not start Claude login when no usable account exists"
             )
             .unwrap();
             writeln!(
@@ -623,19 +648,19 @@ fn render_help_en(topic: HelpTopic) -> String {
             .unwrap();
             writeln!(
                 &mut out,
-                "      --no-resume        Always start a fresh Codex session"
+                "      --no-resume        Always start a fresh Claude session"
             )
             .unwrap();
             writeln!(
                 &mut out,
-                "      --no-launch        Switch the account but do not start Codex"
+                "      --no-launch        Switch the account but do not start Claude"
             )
             .unwrap();
             writeln!(&mut out, "  -h, --help             Print help").unwrap();
         }
         HelpTopic::Auto => {
             writeln!(&mut out, "Usage:").unwrap();
-            writeln!(&mut out, "  scodex auto [OPTIONS]").unwrap();
+            writeln!(&mut out, "  sclaude auto [OPTIONS]").unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "Options:").unwrap();
             writeln!(
@@ -645,7 +670,7 @@ fn render_help_en(topic: HelpTopic) -> String {
             .unwrap();
             writeln!(
                 &mut out,
-                "      --no-login         Do not start device auth when no usable account exists"
+                "      --no-login         Do not start Claude login when no usable account exists"
             )
             .unwrap();
             writeln!(
@@ -657,7 +682,7 @@ fn render_help_en(topic: HelpTopic) -> String {
         }
         HelpTopic::Add => {
             writeln!(&mut out, "Usage:").unwrap();
-            writeln!(&mut out, "  scodex add [OPTIONS]").unwrap();
+            writeln!(&mut out, "  sclaude add [OPTIONS]").unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "Options:").unwrap();
             writeln!(
@@ -669,30 +694,30 @@ fn render_help_en(topic: HelpTopic) -> String {
         }
         HelpTopic::Login => {
             writeln!(&mut out, "Usage:").unwrap();
-            writeln!(&mut out, "  scodex login [OPTIONS]").unwrap();
+            writeln!(&mut out, "  sclaude login [OPTIONS]").unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "Options:").unwrap();
             writeln!(
                 &mut out,
-                "      --oauth              Use the browser OAuth flow with auto-fill; requires --username and --password"
+                "      --oauth              Use the compatibility browser-assisted login flow; currently uses --username as the email hint"
             )
             .unwrap();
             writeln!(
                 &mut out,
-                "      --username <EMAIL>   Email used when --oauth is set"
+                "      --username <EMAIL>   Email hint passed to Claude login"
             )
             .unwrap();
             writeln!(
                 &mut out,
-                "      --password <PASS>    Password used when --oauth is set (visible in ps; scope to trusted shells)"
+                "      --password <PASS>    Reserved for compatibility with scodex; currently ignored"
             )
             .unwrap();
             writeln!(&mut out, "  -h, --help               Print help").unwrap();
         }
         HelpTopic::Deploy => {
             writeln!(&mut out, "Usage:").unwrap();
-            writeln!(&mut out, "  scodex deploy [OPTIONS] <TARGET>").unwrap();
-            writeln!(&mut out, "  scodex sync [OPTIONS] <TARGET>").unwrap();
+            writeln!(&mut out, "  sclaude deploy [OPTIONS] <TARGET>").unwrap();
+            writeln!(&mut out, "  sclaude sync [OPTIONS] <TARGET>").unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "Arguments:").unwrap();
             writeln!(
@@ -711,7 +736,7 @@ fn render_help_en(topic: HelpTopic) -> String {
         }
         HelpTopic::Push => {
             writeln!(&mut out, "Usage:").unwrap();
-            writeln!(&mut out, "  scodex push [OPTIONS] <REPO>").unwrap();
+            writeln!(&mut out, "  sclaude push [OPTIONS] <REPO>").unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "Arguments:").unwrap();
             writeln!(
@@ -734,14 +759,14 @@ fn render_help_en(topic: HelpTopic) -> String {
             writeln!(&mut out, "Environment:").unwrap();
             writeln!(
                 &mut out,
-                "  SCODEX_POOL_KEY  Symmetric key source for encrypting the account pool"
+                "  SCLAUDE_POOL_KEY  Symmetric key source for encrypting the account pool"
             )
             .unwrap();
             writeln!(&mut out, "  -h, --help            Print help").unwrap();
         }
         HelpTopic::Pull => {
             writeln!(&mut out, "Usage:").unwrap();
-            writeln!(&mut out, "  scodex pull [OPTIONS] <REPO>").unwrap();
+            writeln!(&mut out, "  sclaude pull [OPTIONS] <REPO>").unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "Arguments:").unwrap();
             writeln!(
@@ -764,14 +789,14 @@ fn render_help_en(topic: HelpTopic) -> String {
             writeln!(&mut out, "Environment:").unwrap();
             writeln!(
                 &mut out,
-                "  SCODEX_POOL_KEY  Symmetric key source for decrypting the account pool"
+                "  SCLAUDE_POOL_KEY  Symmetric key source for decrypting the account pool"
             )
             .unwrap();
             writeln!(&mut out, "  -h, --help            Print help").unwrap();
         }
         HelpTopic::Use => {
             writeln!(&mut out, "Usage:").unwrap();
-            writeln!(&mut out, "  scodex use <EMAIL>").unwrap();
+            writeln!(&mut out, "  sclaude use <EMAIL>").unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "Arguments:").unwrap();
             writeln!(&mut out, "  <EMAIL>  Account email to switch to").unwrap();
@@ -781,7 +806,7 @@ fn render_help_en(topic: HelpTopic) -> String {
         }
         HelpTopic::Rm => {
             writeln!(&mut out, "Usage:").unwrap();
-            writeln!(&mut out, "  scodex rm [OPTIONS] <EMAIL>").unwrap();
+            writeln!(&mut out, "  sclaude rm [OPTIONS] <EMAIL>").unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "Arguments:").unwrap();
             writeln!(&mut out, "  <EMAIL>  Account email to remove").unwrap();
@@ -796,22 +821,22 @@ fn render_help_en(topic: HelpTopic) -> String {
         }
         HelpTopic::List => {
             writeln!(&mut out, "Usage:").unwrap();
-            writeln!(&mut out, "  scodex list").unwrap();
+            writeln!(&mut out, "  sclaude list").unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "Options:").unwrap();
             writeln!(&mut out, "  -h, --help  Print help").unwrap();
         }
         HelpTopic::Refresh => {
             writeln!(&mut out, "Usage:").unwrap();
-            writeln!(&mut out, "  scodex refresh").unwrap();
+            writeln!(&mut out, "  sclaude refresh").unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "Options:").unwrap();
             writeln!(&mut out, "  -h, --help  Print help").unwrap();
         }
         HelpTopic::Update => {
             writeln!(&mut out, "Usage:").unwrap();
-            writeln!(&mut out, "  scodex update [OPTIONS]").unwrap();
-            writeln!(&mut out, "  scodex upgrade [OPTIONS]").unwrap();
+            writeln!(&mut out, "  sclaude update [OPTIONS]").unwrap();
+            writeln!(&mut out, "  sclaude upgrade [OPTIONS]").unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "Options:").unwrap();
             writeln!(
@@ -823,12 +848,12 @@ fn render_help_en(topic: HelpTopic) -> String {
         }
         HelpTopic::ImportAuth => {
             writeln!(&mut out, "Usage:").unwrap();
-            writeln!(&mut out, "  scodex import-auth <PATH>").unwrap();
+            writeln!(&mut out, "  sclaude import-auth <PATH>").unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "Arguments:").unwrap();
             writeln!(
                 &mut out,
-                "  <PATH>  Path to an auth.json file or a home directory containing it"
+                "  <PATH>  Path to a Claude auth file or a profile directory containing it"
             )
             .unwrap();
             writeln!(&mut out).unwrap();
@@ -837,7 +862,7 @@ fn render_help_en(topic: HelpTopic) -> String {
         }
         HelpTopic::ImportKnown => {
             writeln!(&mut out, "Usage:").unwrap();
-            writeln!(&mut out, "  scodex import-known").unwrap();
+            writeln!(&mut out, "  sclaude import-known").unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "Options:").unwrap();
             writeln!(&mut out, "  -h, --help  Print help").unwrap();
@@ -853,20 +878,20 @@ fn render_help_zh(topic: HelpTopic) -> String {
             writeln!(&mut out, "{}", ui::messages().cli_about()).unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "用法：").unwrap();
-            writeln!(&mut out, "  scodex [选项] [命令]").unwrap();
+            writeln!(&mut out, "  sclaude [选项] [命令]").unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "命令：").unwrap();
             writeln!(
                 &mut out,
-                "  launch       切换到最佳账号，并启动或恢复 Codex"
+                "  launch       切换到最佳账号，并启动或恢复 Claude"
             )
             .unwrap();
-            writeln!(&mut out, "  auto         切换到最佳账号，但不启动 Codex").unwrap();
+            writeln!(&mut out, "  auto         切换到最佳账号，但不启动 Claude").unwrap();
             writeln!(&mut out, "  add          打开注册页，然后新增一个账号").unwrap();
-            writeln!(&mut out, "  login        通过设备登录新增一个账号").unwrap();
+            writeln!(&mut out, "  login        通过 Claude 登录新增一个账号").unwrap();
             writeln!(
                 &mut out,
-                "  deploy       把当前 auth.json 复制到远端机器 [别名：sync]"
+                "  deploy       把当前 Claude 配置复制到远端机器 [别名：sync]"
             )
             .unwrap();
             writeln!(&mut out, "  push         把本地账号池推送到 Git 仓库").unwrap();
@@ -875,12 +900,8 @@ fn render_help_zh(topic: HelpTopic) -> String {
             writeln!(&mut out, "  rm           按邮箱删除一个已保存的账号").unwrap();
             writeln!(&mut out, "  list         显示最新账号额度").unwrap();
             writeln!(&mut out, "  refresh      刷新所有已知账号的实时额度").unwrap();
-            writeln!(&mut out, "  update       自更新 scodex [别名：upgrade]").unwrap();
-            writeln!(
-                &mut out,
-                "  import-auth  导入 auth.json 文件或其所在 home 目录"
-            )
-            .unwrap();
+            writeln!(&mut out, "  update       自更新 sclaude [别名：upgrade]").unwrap();
+            writeln!(&mut out, "  import-auth  导入 Claude 认证文件或配置目录").unwrap();
             writeln!(&mut out, "  import-known 导入默认已知认证来源").unwrap();
             writeln!(&mut out, "  help         显示帮助").unwrap();
             writeln!(&mut out).unwrap();
@@ -890,7 +911,7 @@ fn render_help_zh(topic: HelpTopic) -> String {
         }
         HelpTopic::Launch => {
             writeln!(&mut out, "用法：").unwrap();
-            writeln!(&mut out, "  scodex launch [选项] [<codex 参数...>]").unwrap();
+            writeln!(&mut out, "  sclaude launch [选项] [<claude 参数...>]").unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "选项：").unwrap();
             writeln!(
@@ -900,21 +921,21 @@ fn render_help_zh(topic: HelpTopic) -> String {
             .unwrap();
             writeln!(
                 &mut out,
-                "      --no-login         当没有可用账号时，不自动发起设备登录"
+                "      --no-login         当没有可用账号时，不自动发起 Claude 登录"
             )
             .unwrap();
             writeln!(&mut out, "      --dry-run          只显示会选中的账号").unwrap();
-            writeln!(&mut out, "      --no-resume        总是新开 Codex 会话").unwrap();
+            writeln!(&mut out, "      --no-resume        总是新开 Claude 会话").unwrap();
             writeln!(
                 &mut out,
-                "      --no-launch        只切换账号，不启动 Codex"
+                "      --no-launch        只切换账号，不启动 Claude"
             )
             .unwrap();
             writeln!(&mut out, "  -h, --help             显示帮助").unwrap();
         }
         HelpTopic::Auto => {
             writeln!(&mut out, "用法：").unwrap();
-            writeln!(&mut out, "  scodex auto [选项]").unwrap();
+            writeln!(&mut out, "  sclaude auto [选项]").unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "选项：").unwrap();
             writeln!(
@@ -924,7 +945,7 @@ fn render_help_zh(topic: HelpTopic) -> String {
             .unwrap();
             writeln!(
                 &mut out,
-                "      --no-login         当没有可用账号时，不自动发起设备登录"
+                "      --no-login         当没有可用账号时，不自动发起 Claude 登录"
             )
             .unwrap();
             writeln!(
@@ -936,7 +957,7 @@ fn render_help_zh(topic: HelpTopic) -> String {
         }
         HelpTopic::Add => {
             writeln!(&mut out, "用法：").unwrap();
-            writeln!(&mut out, "  scodex add [选项]").unwrap();
+            writeln!(&mut out, "  sclaude add [选项]").unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "选项：").unwrap();
             writeln!(&mut out, "      --switch  注册/登录完成后切换到新账号").unwrap();
@@ -944,30 +965,30 @@ fn render_help_zh(topic: HelpTopic) -> String {
         }
         HelpTopic::Login => {
             writeln!(&mut out, "用法：").unwrap();
-            writeln!(&mut out, "  scodex login [选项]").unwrap();
+            writeln!(&mut out, "  sclaude login [选项]").unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "选项：").unwrap();
             writeln!(
                 &mut out,
-                "      --oauth              使用浏览器 OAuth 流程并自动填充，需要同时传入 --username 和 --password"
+                "      --oauth              使用兼容的浏览器辅助登录流程；当前会把 --username 作为邮箱提示"
             )
             .unwrap();
             writeln!(
                 &mut out,
-                "      --username <EMAIL>   --oauth 模式下使用的邮箱"
+                "      --username <EMAIL>   传给 Claude 登录的邮箱提示"
             )
             .unwrap();
             writeln!(
                 &mut out,
-                "      --password <PASS>    --oauth 模式下使用的密码（会出现在 ps 中，建议仅在可信 shell 使用）"
+                "      --password <PASS>    为兼容 scodex 保留，当前会被忽略"
             )
             .unwrap();
             writeln!(&mut out, "  -h, --help               显示帮助").unwrap();
         }
         HelpTopic::Deploy => {
             writeln!(&mut out, "用法：").unwrap();
-            writeln!(&mut out, "  scodex deploy [选项] <TARGET>").unwrap();
-            writeln!(&mut out, "  scodex sync [选项] <TARGET>").unwrap();
+            writeln!(&mut out, "  sclaude deploy [选项] <TARGET>").unwrap();
+            writeln!(&mut out, "  sclaude sync [选项] <TARGET>").unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "参数：").unwrap();
             writeln!(
@@ -986,7 +1007,7 @@ fn render_help_zh(topic: HelpTopic) -> String {
         }
         HelpTopic::Push => {
             writeln!(&mut out, "用法：").unwrap();
-            writeln!(&mut out, "  scodex push [选项] <REPO>").unwrap();
+            writeln!(&mut out, "  sclaude push [选项] <REPO>").unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "参数：").unwrap();
             writeln!(&mut out, "  <REPO>  Git 远端 URL 或本地仓库路径").unwrap();
@@ -1003,12 +1024,12 @@ fn render_help_zh(topic: HelpTopic) -> String {
             )
             .unwrap();
             writeln!(&mut out, "环境变量：").unwrap();
-            writeln!(&mut out, "  SCODEX_POOL_KEY  用于加密账号池的对称密钥来源").unwrap();
+            writeln!(&mut out, "  SCLAUDE_POOL_KEY  用于加密账号池的对称密钥来源").unwrap();
             writeln!(&mut out, "  -h, --help            显示帮助").unwrap();
         }
         HelpTopic::Pull => {
             writeln!(&mut out, "用法：").unwrap();
-            writeln!(&mut out, "  scodex pull [选项] <REPO>").unwrap();
+            writeln!(&mut out, "  sclaude pull [选项] <REPO>").unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "参数：").unwrap();
             writeln!(&mut out, "  <REPO>  Git 远端 URL 或本地仓库路径").unwrap();
@@ -1025,12 +1046,12 @@ fn render_help_zh(topic: HelpTopic) -> String {
             )
             .unwrap();
             writeln!(&mut out, "环境变量：").unwrap();
-            writeln!(&mut out, "  SCODEX_POOL_KEY  用于解密账号池的对称密钥来源").unwrap();
+            writeln!(&mut out, "  SCLAUDE_POOL_KEY  用于解密账号池的对称密钥来源").unwrap();
             writeln!(&mut out, "  -h, --help            显示帮助").unwrap();
         }
         HelpTopic::Use => {
             writeln!(&mut out, "用法：").unwrap();
-            writeln!(&mut out, "  scodex use <EMAIL>").unwrap();
+            writeln!(&mut out, "  sclaude use <EMAIL>").unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "参数：").unwrap();
             writeln!(&mut out, "  <EMAIL>  要切换到的账号邮箱").unwrap();
@@ -1040,7 +1061,7 @@ fn render_help_zh(topic: HelpTopic) -> String {
         }
         HelpTopic::Rm => {
             writeln!(&mut out, "用法：").unwrap();
-            writeln!(&mut out, "  scodex rm [选项] <EMAIL>").unwrap();
+            writeln!(&mut out, "  sclaude rm [选项] <EMAIL>").unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "参数：").unwrap();
             writeln!(&mut out, "  <EMAIL>  要删除的账号邮箱").unwrap();
@@ -1051,22 +1072,22 @@ fn render_help_zh(topic: HelpTopic) -> String {
         }
         HelpTopic::List => {
             writeln!(&mut out, "用法：").unwrap();
-            writeln!(&mut out, "  scodex list").unwrap();
+            writeln!(&mut out, "  sclaude list").unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "选项：").unwrap();
             writeln!(&mut out, "  -h, --help  显示帮助").unwrap();
         }
         HelpTopic::Refresh => {
             writeln!(&mut out, "用法：").unwrap();
-            writeln!(&mut out, "  scodex refresh").unwrap();
+            writeln!(&mut out, "  sclaude refresh").unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "选项：").unwrap();
             writeln!(&mut out, "  -h, --help  显示帮助").unwrap();
         }
         HelpTopic::Update => {
             writeln!(&mut out, "用法：").unwrap();
-            writeln!(&mut out, "  scodex update [选项]").unwrap();
-            writeln!(&mut out, "  scodex upgrade [选项]").unwrap();
+            writeln!(&mut out, "  sclaude update [选项]").unwrap();
+            writeln!(&mut out, "  sclaude upgrade [选项]").unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "选项：").unwrap();
             writeln!(
@@ -1078,12 +1099,12 @@ fn render_help_zh(topic: HelpTopic) -> String {
         }
         HelpTopic::ImportAuth => {
             writeln!(&mut out, "用法：").unwrap();
-            writeln!(&mut out, "  scodex import-auth <PATH>").unwrap();
+            writeln!(&mut out, "  sclaude import-auth <PATH>").unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "参数：").unwrap();
             writeln!(
                 &mut out,
-                "  <PATH>  auth.json 文件路径，或包含该文件的 home 目录"
+                "  <PATH>  Claude 认证文件路径，或包含该文件的配置目录"
             )
             .unwrap();
             writeln!(&mut out).unwrap();
@@ -1092,7 +1113,7 @@ fn render_help_zh(topic: HelpTopic) -> String {
         }
         HelpTopic::ImportKnown => {
             writeln!(&mut out, "用法：").unwrap();
-            writeln!(&mut out, "  scodex import-known").unwrap();
+            writeln!(&mut out, "  sclaude import-known").unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "选项：").unwrap();
             writeln!(&mut out, "  -h, --help  显示帮助").unwrap();

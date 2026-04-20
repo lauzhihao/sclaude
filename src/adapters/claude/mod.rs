@@ -1,39 +1,44 @@
 use std::env;
+use std::ffi::OsString;
 use std::fs;
 use std::io::{self, IsTerminal, Write};
-use std::net::UdpSocket;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
-use serde_json::Value;
 use uuid::Uuid;
 
-use self::auth::decode_identity;
-use self::paths::{codex_home, codex_install_command, find_codex_bin, find_in_path};
+use self::paths::{
+    claude_config_root, claude_install_command, default_claude_auth_file, find_claude_bin,
+    find_in_path, profile_root_for_account,
+};
 use crate::adapters::{AdapterCapabilities, CliAdapter};
-use crate::core::policy::{choose_best_account, choose_current_account};
+use crate::core::policy::choose_best_account;
 use crate::core::state::{AccountRecord, LiveIdentity, State, UsageSnapshot};
 use crate::core::ui as core_ui;
 
 mod account;
 mod auth;
+mod credentials;
 mod deploy;
-mod device_autofill;
 mod paths;
 mod repo_sync;
 mod ui;
 mod usage;
 
-pub use device_autofill::AutofillRequest;
+#[derive(Debug, Clone)]
+pub struct AutofillRequest {
+    pub email: String,
+    pub password: String,
+}
 
 #[derive(Debug, Default)]
-pub struct CodexAdapter;
+pub struct ClaudeAdapter;
 
-impl CliAdapter for CodexAdapter {
+impl CliAdapter for ClaudeAdapter {
     fn id(&self) -> &'static str {
-        "codex"
+        "claude"
     }
 
     fn capabilities(&self) -> AdapterCapabilities {
@@ -49,13 +54,13 @@ impl CliAdapter for CodexAdapter {
     }
 }
 
-impl CodexAdapter {
+impl ClaudeAdapter {
     pub fn add_account_via_browser(
         &self,
         state_dir: &Path,
         state: &mut State,
     ) -> Result<AccountRecord> {
-        const SIGNUP_URL: &str = "https://auth.openai.com/create-account";
+        const SIGNUP_URL: &str = "https://claude.ai";
         let ui = core_ui::messages();
 
         println!("{}", ui.add_opening_signup());
@@ -69,13 +74,38 @@ impl CodexAdapter {
             }
         }
         self.wait_for_enter_after_signup()?;
-        self.run_device_auth_login(state_dir, state)
+        self.run_interactive_login(state_dir, state, None)
     }
 
     pub fn read_live_identity(&self) -> Option<LiveIdentity> {
-        let auth_path = codex_home().join("auth.json");
-        let auth = self.read_auth_json(&auth_path).ok()?;
-        decode_identity(&auth).ok().map(Into::into)
+        if env::var_os("CLAUDE_CONFIG_DIR").is_some() {
+            return self
+                .read_identity_from_profile(&claude_config_root())
+                .ok()
+                .map(Into::into);
+        }
+
+        self.read_default_auth_status()
+            .map(|status| status.into_identity())
+            .or_else(|_| {
+                default_claude_auth_file()
+                    .ok_or_else(|| anyhow::anyhow!("default Claude auth file not found"))
+                    .and_then(|path| self.read_identity_from_auth_file(&path))
+            })
+            .ok()
+            .map(Into::into)
+    }
+
+    pub fn active_identity_from_state(&self, state: &State) -> Option<LiveIdentity> {
+        let current_id = state.current_account_id.as_ref()?;
+        let account = state
+            .accounts
+            .iter()
+            .find(|account| &account.id == current_id)?;
+        Some(LiveIdentity {
+            email: account.email.clone(),
+            account_id: account.account_id.clone(),
+        })
     }
 
     pub fn ensure_best_account(
@@ -94,33 +124,56 @@ impl CodexAdapter {
             if no_login {
                 return Ok(None);
             }
-            let record = self.run_device_auth_login(state_dir, state)?;
+            let record = self.run_interactive_login(state_dir, state, None)?;
             let usage = self.refresh_account_usage(state, &record);
             if perform_switch {
                 self.switch_account(&record)?;
+                state.current_account_id = Some(record.id.clone());
             }
             return Ok(Some((record, usage)));
         }
 
         self.refresh_all_accounts(state);
-        if let Some(current) =
-            choose_current_account(state, self.read_live_identity().as_ref()).cloned()
+
+        if let Some(current) = state
+            .current_account_id
+            .as_ref()
+            .and_then(|id| state.accounts.iter().find(|account| &account.id == id))
+            .cloned()
         {
             let usage = state
                 .usage_cache
                 .get(&current.id)
                 .cloned()
                 .unwrap_or_default();
-            if perform_switch {
-                self.switch_account(&current)?;
+            if !usage.needs_relogin && usage.last_sync_error.is_none() {
+                if perform_switch {
+                    self.switch_account(&current)?;
+                    state.current_account_id = Some(current.id.clone());
+                }
+                return Ok(Some((current, usage)));
             }
-            return Ok(Some((current, usage)));
         }
 
         if let Some(best) = choose_best_account(state).cloned() {
             let usage = state.usage_cache.get(&best.id).cloned().unwrap_or_default();
             if perform_switch {
                 self.switch_account(&best)?;
+                state.current_account_id = Some(best.id.clone());
+            }
+            return Ok(Some((best, usage)));
+        }
+
+        if let Some(best) = state
+            .accounts
+            .iter()
+            .max_by_key(|account| account.updated_at)
+            .cloned()
+        {
+            let usage = state.usage_cache.get(&best.id).cloned().unwrap_or_default();
+            if perform_switch {
+                self.switch_account(&best)?;
+                state.current_account_id = Some(best.id.clone());
             }
             return Ok(Some((best, usage)));
         }
@@ -128,48 +181,47 @@ impl CodexAdapter {
         if no_login {
             return Ok(None);
         }
-        let record = self.run_device_auth_login(state_dir, state)?;
+
+        let record = self.run_interactive_login(state_dir, state, None)?;
         let usage = self.refresh_account_usage(state, &record);
         if perform_switch {
             self.switch_account(&record)?;
+            state.current_account_id = Some(record.id.clone());
         }
         Ok(Some((record, usage)))
     }
 
-    pub fn run_device_auth_login(
+    pub fn run_interactive_login(
         &self,
         state_dir: &Path,
         state: &mut State,
+        email_hint: Option<&str>,
     ) -> Result<AccountRecord> {
         let ui = core_ui::messages();
-        let codex_bin = self.resolve_codex_bin()?;
+        let claude_bin = self.resolve_claude_bin()?;
         let temp_root = state_dir.join(".tmp");
         fs::create_dir_all(&temp_root)
             .with_context(|| format!("failed to create {}", temp_root.display()))?;
-        let tmp_home = temp_root.join(format!("scodex-login-{}", Uuid::new_v4()));
+        let tmp_home = temp_root.join(format!("sclaude-login-{}", Uuid::new_v4()));
         fs::create_dir_all(&tmp_home)
             .with_context(|| format!("failed to create {}", tmp_home.display()))?;
 
         println!("{}", ui.login_start());
-        println!("{}", ui.login_open_url());
-        println!("{}", ui.login_headless_ip(&detect_local_ip()));
-        println!();
 
-        let status = Command::new(&codex_bin)
-            .arg("login")
-            .arg("--device-auth")
-            .env("CODEX_HOME", &tmp_home)
+        let mut command = Command::new(&claude_bin);
+        command
+            .args(["auth", "login", "--claudeai"])
+            .env("CLAUDE_CONFIG_DIR", &tmp_home);
+        if let Some(email) = email_hint.map(str::trim).filter(|value| !value.is_empty()) {
+            command.arg("--email").arg(email);
+        }
+
+        let status = command
             .status()
-            .with_context(|| format!("failed to execute {}", codex_bin.display()))?;
+            .with_context(|| format!("failed to execute {}", claude_bin.display()))?;
         if !status.success() {
             let _ = fs::remove_dir_all(&tmp_home);
             bail!("{}", ui.codex_login_failed(status.code().unwrap_or(1)));
-        }
-
-        let auth_path = tmp_home.join("auth.json");
-        if !auth_path.exists() {
-            let _ = fs::remove_dir_all(&tmp_home);
-            bail!("{}", ui.login_missing_auth());
         }
 
         let record = self.import_auth_path(state_dir, state, &tmp_home)?;
@@ -183,32 +235,8 @@ impl CodexAdapter {
         state: &mut State,
         request: AutofillRequest,
     ) -> Result<AccountRecord> {
-        let ui = core_ui::messages();
-        let codex_bin = self.resolve_codex_bin()?;
-        let temp_root = state_dir.join(".tmp");
-        fs::create_dir_all(&temp_root)
-            .with_context(|| format!("failed to create {}", temp_root.display()))?;
-        let tmp_home = temp_root.join(format!("scodex-login-{}", Uuid::new_v4()));
-        fs::create_dir_all(&tmp_home)
-            .with_context(|| format!("failed to create {}", tmp_home.display()))?;
-
-        println!("{}", ui.login_autofill_start());
-
-        let run = device_autofill::run_device_autofill_login(&codex_bin, &tmp_home, &request);
-        if let Err(error) = run {
-            let _ = fs::remove_dir_all(&tmp_home);
-            return Err(error);
-        }
-
-        let auth_path = tmp_home.join("auth.json");
-        if !auth_path.exists() {
-            let _ = fs::remove_dir_all(&tmp_home);
-            bail!("{}", ui.login_missing_auth());
-        }
-
-        let record = self.import_auth_path(state_dir, state, &tmp_home)?;
-        let _ = fs::remove_dir_all(&tmp_home);
-        Ok(record)
+        let _ = request.password;
+        self.run_interactive_login(state_dir, state, Some(&request.email))
     }
 
     fn wait_for_enter_after_signup(&self) -> Result<()> {
@@ -226,21 +254,27 @@ impl CodexAdapter {
         Ok(())
     }
 
-    pub fn launch_codex(&self, extra_args: &[std::ffi::OsString], resume: bool) -> Result<i32> {
+    pub fn launch_claude(
+        &self,
+        account: &AccountRecord,
+        extra_args: &[OsString],
+        resume: bool,
+    ) -> Result<i32> {
         let ui = core_ui::messages();
-        let codex_bin = self.resolve_codex_bin()?;
-        let fresh_cmd = build_codex_launch_command(&codex_bin, extra_args, false);
-        if resume
-            && self.has_resumable_session(
-                &env::current_dir().context("failed to read current directory")?,
-            )
-        {
-            let resume_cmd = build_codex_launch_command(&codex_bin, extra_args, true);
+        self.switch_account(account)?;
+        let claude_bin = self.resolve_claude_bin()?;
+        let fresh_cmd = build_claude_launch_command(&claude_bin, extra_args, false);
+        let profile_root = profile_root_for_account(account);
+
+        if resume && !contains_resume_flag(extra_args) {
+            let resume_cmd = build_claude_launch_command(&claude_bin, extra_args, true);
             println!("{}", ui.resume_session());
             let status = Command::new(&resume_cmd[0])
                 .args(&resume_cmd[1..])
+                .env("CLAUDE_CONFIG_DIR", &profile_root)
+                .env("IS_SANDBOX", "1")
                 .status()
-                .context("failed to execute codex resume")?;
+                .context("failed to execute claude continue")?;
             if status.success() {
                 return Ok(status.code().unwrap_or(0));
             }
@@ -251,32 +285,39 @@ impl CodexAdapter {
 
         let status = Command::new(&fresh_cmd[0])
             .args(&fresh_cmd[1..])
+            .env("CLAUDE_CONFIG_DIR", &profile_root)
+            .env("IS_SANDBOX", "1")
             .status()
-            .context("failed to execute codex")?;
+            .context("failed to execute claude")?;
         Ok(status.code().unwrap_or(1))
     }
 
-    pub fn run_passthrough(&self, extra_args: &[std::ffi::OsString]) -> Result<i32> {
-        let codex_bin = self.resolve_codex_bin()?;
-        let status = Command::new(&codex_bin)
-            .args(extra_args)
+    pub fn run_passthrough(&self, account: &AccountRecord, extra_args: &[OsString]) -> Result<i32> {
+        self.switch_account(account)?;
+        let claude_bin = self.resolve_claude_bin()?;
+        let profile_root = profile_root_for_account(account);
+        let command = build_passthrough_command(&claude_bin, extra_args);
+        let status = Command::new(&command[0])
+            .args(&command[1..])
+            .env("CLAUDE_CONFIG_DIR", &profile_root)
+            .env("IS_SANDBOX", "1")
             .status()
-            .with_context(|| format!("failed to execute {}", codex_bin.display()))?;
+            .with_context(|| format!("failed to execute {}", claude_bin.display()))?;
         Ok(status.code().unwrap_or(1))
     }
 
-    pub fn resolve_codex_bin(&self) -> Result<PathBuf> {
-        if let Some(path) = find_codex_bin() {
+    pub fn resolve_claude_bin(&self) -> Result<PathBuf> {
+        if let Some(path) = find_claude_bin() {
             return Ok(path);
         }
 
-        self.offer_to_install_codex()?;
-        find_codex_bin()
+        self.offer_to_install_claude()?;
+        find_claude_bin()
             .ok_or_else(|| anyhow::anyhow!(core_ui::messages().codex_install_still_missing()))
     }
 
-    fn offer_to_install_codex(&self) -> Result<()> {
-        let install = codex_install_command();
+    fn offer_to_install_claude(&self) -> Result<()> {
+        let install = claude_install_command();
         let install_line = install.display();
         let ui = core_ui::messages();
 
@@ -326,23 +367,9 @@ impl CodexAdapter {
                     eprintln!("{install_line}");
                     std::process::exit(1);
                 }
-                None => {
-                    eprintln!("{}", ui.invalid_yes_no());
-                }
+                None => eprintln!("{}", ui.invalid_yes_no()),
             }
         }
-    }
-
-    fn has_resumable_session(&self, cwd: &Path) -> bool {
-        let sessions_root = codex_home().join("sessions");
-        if !sessions_root.exists() {
-            return false;
-        }
-        let target = match cwd.canonicalize() {
-            Ok(path) => path.to_string_lossy().into_owned(),
-            Err(_) => return false,
-        };
-        has_resumable_session_under(&sessions_root, &target)
     }
 }
 
@@ -415,61 +442,62 @@ pub(crate) fn parse_yes_no(value: &str) -> Option<bool> {
     }
 }
 
-fn build_codex_launch_command(
-    codex_bin: &Path,
-    extra_args: &[std::ffi::OsString],
+fn build_claude_launch_command(
+    claude_bin: &Path,
+    extra_args: &[OsString],
     resume: bool,
-) -> Vec<std::ffi::OsString> {
-    let mut command = vec![codex_bin.as_os_str().to_os_string()];
+) -> Vec<OsString> {
+    let mut command = vec![claude_bin.as_os_str().to_os_string()];
     if resume {
-        command.push("resume".into());
-        command.push("--last".into());
+        command.push("-c".into());
     }
-    if !extra_args.iter().any(|arg| arg == "--yolo") {
-        command.push("--yolo".into());
-    }
+    append_runtime_flags(&mut command, extra_args);
     command.extend(extra_args.iter().cloned());
     command
 }
 
-fn has_resumable_session_under(root: &Path, target: &str) -> bool {
-    let entries = match fs::read_dir(root) {
-        Ok(entries) => entries,
-        Err(_) => return false,
-    };
+fn build_passthrough_command(claude_bin: &Path, extra_args: &[OsString]) -> Vec<OsString> {
+    let mut command = vec![claude_bin.as_os_str().to_os_string()];
+    append_runtime_flags(&mut command, extra_args);
+    command.extend(extra_args.iter().cloned());
+    command
+}
 
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            if has_resumable_session_under(&path, target) {
-                return true;
-            }
-            continue;
-        }
-        if path.extension().and_then(|item| item.to_str()) != Some("jsonl") {
-            continue;
-        }
-        let Ok(contents) = fs::read_to_string(&path) else {
-            continue;
-        };
-        let Some(first_line) = contents.lines().next() else {
-            continue;
-        };
-        let Ok(record) = serde_json::from_str::<Value>(first_line) else {
-            continue;
-        };
-        if record.get("type").and_then(Value::as_str) != Some("session_meta") {
-            continue;
-        }
-        let payload = record.get("payload").unwrap_or(&Value::Null);
-        if payload.get("originator").and_then(Value::as_str) != Some("codex-tui") {
-            continue;
-        }
-        if payload.get("cwd").and_then(Value::as_str) == Some(target) {
-            return true;
-        }
+fn append_runtime_flags(command: &mut Vec<OsString>, extra_args: &[OsString]) {
+    if !has_flag(extra_args, "--dangerously-skip-permissions") {
+        command.push("--dangerously-skip-permissions".into());
     }
-    false
+
+    if !has_flag(extra_args, "--model")
+        && let Some(model) = invoked_model_alias()
+    {
+        command.push("--model".into());
+        command.push(model.into());
+    }
+}
+
+fn has_flag(args: &[OsString], flag: &str) -> bool {
+    args.iter().any(|arg| arg == flag)
+}
+
+fn contains_resume_flag(args: &[OsString]) -> bool {
+    args.iter()
+        .any(|arg| matches!(arg.to_str(), Some("-c" | "--continue" | "-r" | "--resume")))
+}
+
+fn invoked_model_alias() -> Option<&'static str> {
+    let invoked = env::args_os().next()?;
+    let stem = Path::new(&invoked)
+        .file_stem()
+        .and_then(|value| value.to_str())?
+        .to_ascii_lowercase();
+
+    match stem.as_str() {
+        "opus" | "sclaude-opus" => Some("opus"),
+        "sonnet" | "sclaude-sonnet" => Some("sonnet"),
+        "haiku" | "sclaude-haiku" => Some("haiku"),
+        _ => None,
+    }
 }
 
 fn now_ts() -> i64 {
@@ -479,79 +507,45 @@ fn now_ts() -> i64 {
         .unwrap_or(0)
 }
 
+#[allow(dead_code)]
 fn detect_local_ip() -> String {
-    let sock = match UdpSocket::bind("0.0.0.0:0") {
-        Ok(sock) => sock,
-        Err(_) => return "127.0.0.1".into(),
-    };
-    if sock.connect("8.8.8.8:80").is_ok()
-        && let Ok(address) = sock.local_addr()
-    {
-        return address.ip().to_string();
-    }
     "127.0.0.1".into()
 }
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::ffi::OsString;
     use std::path::Path;
 
-    use anyhow::Result;
-    use uuid::Uuid;
-
-    use std::ffi::OsString;
-
-    use super::{build_codex_launch_command, has_resumable_session_under, parse_yes_no};
+    use super::{build_claude_launch_command, contains_resume_flag, parse_yes_no};
 
     #[test]
-    fn build_launch_command_adds_resume_and_yolo_when_needed() {
-        let command = build_codex_launch_command(
-            Path::new("/usr/bin/codex"),
-            &[OsString::from("exec"), OsString::from("fix it")],
+    fn build_launch_command_adds_model_flags_when_missing() {
+        let command = build_claude_launch_command(
+            Path::new("/usr/bin/claude"),
+            &[OsString::from("agents")],
             true,
         );
 
-        assert_eq!(command[1], OsString::from("resume"));
-        assert_eq!(command[2], OsString::from("--last"));
-        assert!(command.iter().any(|arg| arg == "--yolo"));
+        assert_eq!(command[1], OsString::from("-c"));
+        assert!(
+            command
+                .iter()
+                .any(|arg| arg == "--dangerously-skip-permissions")
+        );
     }
 
     #[test]
-    fn detects_resumable_session_from_session_meta() -> Result<()> {
-        let tmp = std::env::temp_dir().join(format!("scodex-sessions-{}", Uuid::new_v4()));
-        fs::create_dir_all(tmp.join("2026"))?;
-        let cwd = tmp.join("project");
-        fs::create_dir_all(&cwd)?;
-        let session_file = tmp.join("2026").join("session.jsonl");
-        fs::write(
-            &session_file,
-            format!(
-                "{}\n",
-                serde_json::json!({
-                    "type": "session_meta",
-                    "payload": {
-                        "originator": "codex-tui",
-                        "cwd": cwd.canonicalize()?.to_string_lossy(),
-                    }
-                })
-            ),
-        )?;
-
-        assert!(has_resumable_session_under(
-            &tmp,
-            &cwd.canonicalize()?.to_string_lossy(),
-        ));
-        fs::remove_dir_all(&tmp)?;
-        Ok(())
-    }
-
-    #[test]
-    fn parse_yes_no_accepts_expected_values_case_insensitively() {
-        assert_eq!(parse_yes_no("Y"), Some(true));
-        assert_eq!(parse_yes_no("yes"), Some(true));
-        assert_eq!(parse_yes_no("N"), Some(false));
-        assert_eq!(parse_yes_no("No"), Some(false));
+    fn parse_yes_no_accepts_common_answers() {
+        assert_eq!(parse_yes_no("y"), Some(true));
+        assert_eq!(parse_yes_no("NO"), Some(false));
         assert_eq!(parse_yes_no("maybe"), None);
+    }
+
+    #[test]
+    fn resume_flag_detection_handles_claude_syntax() {
+        assert!(contains_resume_flag(&[OsString::from("-c")]));
+        assert!(contains_resume_flag(&[OsString::from("--resume")]));
+        assert!(!contains_resume_flag(&[OsString::from("agents")]));
     }
 }
