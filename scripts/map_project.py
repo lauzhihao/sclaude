@@ -4,7 +4,7 @@ import re
 import fnmatch
 from pathlib import Path
 
-# ================= scodex (auto-codex-open) 项目配置 =================
+# ================= sclaude 项目配置 =================
 PROJECT_ROOT = Path(".").resolve()
 OUTPUT_FILE = ".project_map"
 
@@ -225,7 +225,7 @@ def extract_module_summary():
 
 
 def main():
-    print("[map] Generating scodex project structure map...")
+    print("[map] Generating sclaude project structure map...")
     extra_patterns = load_extra_ignores()
     tree_lines = generate_tree(PROJECT_ROOT, extra_patterns=extra_patterns)
 
@@ -234,7 +234,7 @@ def main():
     module_lines = extract_module_summary()
 
     content = [
-        "# scodex (auto-codex-open) Project Map",
+        "# sclaude Project Map",
         f"> Generated: {os.popen('date').read().strip()}",
         "> Strategy: Source Focused (src expanded, target collapsed)",
         "",
