@@ -4,31 +4,49 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use directories::BaseDirs;
+use serde::{Deserialize, Serialize};
 
 use crate::core::state::State;
 
 const DEFAULT_STATE_BASENAME: &str = "sclaude";
-const LEGACY_STATE_BASENAME: &str = "auto-codex";
+const STATE_DIR_ENV: &str = "SCLAUDE_HOME";
+const REPO_SYNC_CONFIG_FILENAME: &str = "repo-sync.json";
 
 pub fn resolve_state_dir(override_dir: Option<&Path>) -> Result<PathBuf> {
     if let Some(path) = override_dir {
         return Ok(expand_user_path(path));
     }
 
-    for env_name in ["SCLAUDE_HOME", "AUTO_CODEX_HOME", "CODEX_AUTOSWITCH_HOME"] {
-        if let Some(value) = env::var_os(env_name) {
-            return Ok(expand_user_path(Path::new(&value)));
-        }
+    if let Some(path) = configured_state_dir_from_env() {
+        return Ok(path);
+    }
+
+    default_state_dir()
+}
+
+fn configured_state_dir_from_env() -> Option<PathBuf> {
+    env::var_os(STATE_DIR_ENV).map(|value| expand_user_path(Path::new(&value)))
+}
+
+fn default_state_dir() -> Result<PathBuf> {
+    if let Some(home) = env::var_os("HOME").map(PathBuf::from) {
+        return Ok(home.join(format!(".{DEFAULT_STATE_BASENAME}")));
     }
 
     let base_dirs =
         BaseDirs::new().context("unable to resolve base directories for current user")?;
-    let root = base_dirs.data_local_dir().to_path_buf();
-    let legacy_dir = root.join(LEGACY_STATE_BASENAME);
-    if legacy_dir.exists() {
-        return Ok(legacy_dir);
-    }
-    Ok(root.join(DEFAULT_STATE_BASENAME))
+    Ok(default_state_dir_for_home(None, base_dirs.data_local_dir()))
+}
+
+fn default_state_dir_for_home(home: Option<&Path>, data_local_dir: &Path) -> PathBuf {
+    home.map(|home| home.join(format!(".{DEFAULT_STATE_BASENAME}")))
+        .unwrap_or_else(|| data_local_dir.join(DEFAULT_STATE_BASENAME))
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct RepoSyncConfig {
+    #[serde(default)]
+    pub last_repo: Option<String>,
 }
 
 pub fn load_state(state_dir: &Path) -> Result<State> {
@@ -51,6 +69,32 @@ pub fn save_state(state_dir: &Path, state: &State) -> Result<()> {
     let tmp_path = state_dir.join(".state.json.tmp");
     let final_path = state_dir.join("state.json");
     let mut bytes = serde_json::to_vec_pretty(state)?;
+    bytes.push(b'\n');
+    fs::write(&tmp_path, bytes)
+        .with_context(|| format!("failed to write {}", tmp_path.display()))?;
+    fs::rename(&tmp_path, &final_path)
+        .with_context(|| format!("failed to move {} into place", final_path.display()))?;
+    Ok(())
+}
+
+pub fn load_repo_sync_config(state_dir: &Path) -> Result<RepoSyncConfig> {
+    let config_path = state_dir.join(REPO_SYNC_CONFIG_FILENAME);
+    if !config_path.exists() {
+        return Ok(RepoSyncConfig::default());
+    }
+
+    let contents = fs::read_to_string(&config_path)
+        .with_context(|| format!("failed to read {}", config_path.display()))?;
+    serde_json::from_str(&contents)
+        .with_context(|| format!("invalid repo sync config: {}", config_path.display()))
+}
+
+pub fn save_repo_sync_config(state_dir: &Path, config: &RepoSyncConfig) -> Result<()> {
+    fs::create_dir_all(state_dir)
+        .with_context(|| format!("failed to create {}", state_dir.display()))?;
+    let tmp_path = state_dir.join(".repo-sync.json.tmp");
+    let final_path = state_dir.join(REPO_SYNC_CONFIG_FILENAME);
+    let mut bytes = serde_json::to_vec_pretty(config)?;
     bytes.push(b'\n');
     fs::write(&tmp_path, bytes)
         .with_context(|| format!("failed to write {}", tmp_path.display()))?;
@@ -123,4 +167,41 @@ pub fn ensure_exists(path: &Path, label: &str) -> Result<()> {
         return Ok(());
     }
     bail!("{label} not found: {}", path.display())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::path::Path;
+
+    use super::{
+        RepoSyncConfig, default_state_dir_for_home, load_repo_sync_config, save_repo_sync_config,
+    };
+
+    #[test]
+    fn default_state_dir_prefers_home_hidden_directory() {
+        let path = default_state_dir_for_home(Some(Path::new("/tmp/home")), Path::new("/tmp/data"));
+        assert_eq!(path, Path::new("/tmp/home/.sclaude"));
+    }
+
+    #[test]
+    fn default_state_dir_falls_back_to_data_directory_without_home() {
+        let path = default_state_dir_for_home(None, Path::new("/tmp/data"));
+        assert_eq!(path, Path::new("/tmp/data/sclaude"));
+    }
+
+    #[test]
+    fn repo_sync_config_round_trip_persists_last_repo() {
+        let dir = std::env::temp_dir().join(format!("sclaude-config-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).expect("create temp dir");
+        let config = RepoSyncConfig {
+            last_repo: Some("git@github.com:org/repo.git".into()),
+        };
+
+        save_repo_sync_config(&dir, &config).expect("save config");
+        let loaded = load_repo_sync_config(&dir).expect("load config");
+
+        assert_eq!(loaded, config);
+        let _ = fs::remove_dir_all(&dir);
+    }
 }

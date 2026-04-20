@@ -287,7 +287,11 @@ impl ClaudeAdapter {
             plan: None,
         };
         let record = self.import_auth_path_with_identity(
-            state_dir, state, &auth_path, Some(&tmp_home), identity,
+            state_dir,
+            state,
+            &auth_path,
+            Some(&tmp_home),
+            identity,
         )?;
         let _ = fs::remove_dir_all(&tmp_home);
         Ok(record)

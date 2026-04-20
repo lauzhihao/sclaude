@@ -26,6 +26,7 @@ use crate::core::ui as core_ui;
 const DEFAULT_BUNDLE_DIR: &str = ".sclaude-account-pool";
 const BUNDLE_FILENAME: &str = "bundle.enc.json";
 const BUNDLE_KEY_ENV: &str = "SCLAUDE_POOL_KEY";
+const BUNDLE_DIR_ENV: &str = "SCLAUDE_POOL_PATH";
 const BUNDLE_ALGORITHM: &str = "xchacha20poly1305-sha256";
 
 impl ClaudeAdapter {
@@ -427,7 +428,22 @@ fn resolve_bundle_key() -> Result<[u8; 32]> {
 }
 
 fn resolve_bundle_dir(bundle_dir: Option<&str>) -> Result<PathBuf> {
-    let raw = bundle_dir.unwrap_or(DEFAULT_BUNDLE_DIR).trim();
+    let configured =
+        resolve_bundle_dir_source(bundle_dir, configured_bundle_dir_from_env().as_deref())
+            .to_string();
+    resolve_bundle_dir_value(&configured)
+}
+
+fn resolve_bundle_dir_source<'a>(bundle_dir: Option<&'a str>, env_dir: Option<&'a str>) -> &'a str {
+    bundle_dir
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or_else(|| env_dir.map(str::trim).filter(|value| !value.is_empty()))
+        .unwrap_or(DEFAULT_BUNDLE_DIR)
+}
+
+fn resolve_bundle_dir_value(raw: &str) -> Result<PathBuf> {
+    let raw = raw.trim();
     if raw.is_empty() {
         bail!("bundle path cannot be empty");
     }
@@ -444,6 +460,13 @@ fn resolve_bundle_dir(bundle_dir: Option<&str>) -> Result<PathBuf> {
         }
     }
     Ok(path)
+}
+
+fn configured_bundle_dir_from_env() -> Option<String> {
+    env::var(BUNDLE_DIR_ENV)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 fn validate_identity_file(identity_file: Option<&Path>) -> Result<()> {
@@ -641,7 +664,7 @@ mod tests {
 
     use super::{
         RepoBundle, RepoBundleAccount, RepoBundleFile, overwrite_local_account_pool,
-        resolve_bundle_dir,
+        resolve_bundle_dir, resolve_bundle_dir_source,
     };
 
     #[test]
@@ -651,6 +674,22 @@ mod tests {
             PathBuf::from(".sclaude-account-pool")
         );
         Ok(())
+    }
+
+    #[test]
+    fn bundle_dir_prefers_cli_argument_over_environment() {
+        assert_eq!(
+            resolve_bundle_dir_source(Some("custom/pool"), Some("env/pool")),
+            "custom/pool"
+        );
+    }
+
+    #[test]
+    fn bundle_dir_uses_environment_when_cli_argument_is_missing() {
+        assert_eq!(
+            resolve_bundle_dir_source(None, Some("env/pool")),
+            "env/pool"
+        );
     }
 
     #[test]

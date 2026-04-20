@@ -214,13 +214,15 @@ sclaude import-known
 
 ```bash
 export SCLAUDE_POOL_KEY='替换成足够长的随机 secret'
-sclaude push [-i <identity_file>] [--path <repo_path>] <repo>
+sclaude push [-i <identity_file>] [--path <repo_path>] [repo]
 ```
 
 - 使用你现有的 Git 凭据克隆仓库
 - 把完整本地账号池导出成加密 bundle
 - 默认写到 `.sclaude-account-pool/bundle.enc.json`
 - 只有加密后的 bundle 发生变化时才会提交并推送
+- 首次显式传入 `[repo]` 后，`sclaude` 会把它记到 `$SCLAUDE_HOME/repo-sync.json`
+- 未传 `[repo]` 时，`sclaude` 会优先读取 `SCLAUDE_POOL_REPO`，再回退到 `$SCLAUDE_HOME` 中保存的仓库地址
 - `--path <repo_path>` 必须是仓库内相对路径
 - `-i <identity_file>` 会通过 `GIT_SSH_COMMAND` 把 SSH 私钥传给 Git
 
@@ -228,12 +230,13 @@ sclaude push [-i <identity_file>] [--path <repo_path>] <repo>
 
 ```bash
 export SCLAUDE_POOL_KEY='替换成和 push 相同的 secret'
-sclaude pull [-i <identity_file>] [--path <repo_path>] <repo>
+sclaude pull [-i <identity_file>] [--path <repo_path>] [repo]
 ```
 
 - 使用你现有的 Git 凭据克隆仓库
 - 解密远端账号池 bundle
 - 直接覆盖本地受管账号池，不做 merge
+- 未传 `[repo]` 时，`sclaude` 会优先读取 `SCLAUDE_POOL_REPO`，再回退到 `$SCLAUDE_HOME` 中保存的仓库地址
 - 导入后会立刻刷新账号状态，并打印最新表格
 
 ### `update`

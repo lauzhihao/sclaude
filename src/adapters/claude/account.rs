@@ -339,9 +339,9 @@ fn find_matching_account<'a>(
     identity_fingerprint: Option<&str>,
 ) -> Option<&'a AccountRecord> {
     state.accounts.iter().find(|account| {
-        identity_fingerprint.is_some_and(|candidate| {
-            account.identity_fingerprint.as_deref() == Some(candidate)
-        }) || account.email.eq_ignore_ascii_case(email)
+        identity_fingerprint
+            .is_some_and(|candidate| account.identity_fingerprint.as_deref() == Some(candidate))
+            || account.email.eq_ignore_ascii_case(email)
             || account_id.is_some_and(|candidate| account.account_id.as_deref() == Some(candidate))
     })
 }

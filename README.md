@@ -214,13 +214,15 @@ sclaude import-known
 
 ```bash
 export SCLAUDE_POOL_KEY='replace-with-a-long-random-secret'
-sclaude push [-i <identity_file>] [--path <repo_path>] <repo>
+sclaude push [-i <identity_file>] [--path <repo_path>] [repo]
 ```
 
 - clones the repository with your existing Git credentials
 - exports the full local account pool as an encrypted bundle
 - stores the bundle under `.sclaude-account-pool/bundle.enc.json` by default
 - only pushes when the encrypted bundle changed
+- when `[repo]` is explicitly provided once, `sclaude` remembers it under `$SCLAUDE_HOME/repo-sync.json`
+- when `[repo]` is omitted, `sclaude` uses `SCLAUDE_POOL_REPO` first, then the saved repo from `$SCLAUDE_HOME`
 - `--path <repo_path>` must be a relative repository subdirectory
 - `-i <identity_file>` passes an SSH key to Git through `GIT_SSH_COMMAND`
 
@@ -228,12 +230,13 @@ sclaude push [-i <identity_file>] [--path <repo_path>] <repo>
 
 ```bash
 export SCLAUDE_POOL_KEY='replace-with-the-same-secret'
-sclaude pull [-i <identity_file>] [--path <repo_path>] <repo>
+sclaude pull [-i <identity_file>] [--path <repo_path>] [repo]
 ```
 
 - clones the repository with your existing Git credentials
 - decrypts the remote account pool bundle
 - force-overwrites the local managed account pool instead of merging
+- when `[repo]` is omitted, `sclaude` uses `SCLAUDE_POOL_REPO` first, then the saved repo from `$SCLAUDE_HOME`
 - refreshes account usage after import and prints the latest table
 
 ### `update`

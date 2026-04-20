@@ -226,20 +226,30 @@ impl Messages {
     }
 
     pub fn na(&self) -> &'static str {
-        if self.is_zh() { "无" } else { "N/A" }
-    }
-
-    pub fn unknown(&self) -> &'static str {
-        if self.is_zh() { "未知" } else { "Unknown" }
+        "N/A"
     }
 
     pub fn table_headers(&self) -> [&'static str; 7] {
         if self.is_zh() {
-            ["当前", "邮箱", "套餐", "5h", "Weekly", "重置时间", "状态"]
+            ["当前", "邮箱", "类型", "5h", "7d", "重置时间", "状态"]
         } else {
-            [
-                "Active", "Email", "Plan", "5h", "Weekly", "ResetOn", "Status",
-            ]
+            ["Active", "Email", "Type", "5h", "7d", "ResetOn", "Status"]
+        }
+    }
+
+    pub fn official_subscription_label(&self) -> &'static str {
+        if self.is_zh() {
+            "官方订阅"
+        } else {
+            "Official"
+        }
+    }
+
+    pub fn third_party_api_label(&self) -> &'static str {
+        if self.is_zh() {
+            "第三方API"
+        } else {
+            "3P API"
         }
     }
 
@@ -381,83 +391,15 @@ impl Messages {
         }
     }
 
-    pub fn repo_sync_invalid_path(&self, path: &str) -> String {
-        if self.is_zh() {
-            format!("无效的仓库子目录：{path}。只允许相对路径，且不能包含 `..`。")
-        } else {
-            format!("Invalid repository subdirectory: {path}. Use a relative path without `..`.")
-        }
-    }
-
-    pub fn repo_sync_missing_key(&self, env_name: &str) -> String {
-        if self.is_zh() {
-            format!("未设置账号池加密密钥环境变量：{env_name}")
-        } else {
-            format!("Missing account-pool encryption key environment variable: {env_name}")
-        }
-    }
-
-    pub fn repo_sync_decrypt_failed(&self, env_name: &str) -> String {
+    pub fn repo_sync_repo_required(&self, env_name: &str) -> String {
         if self.is_zh() {
             format!(
-                "账号池解密失败。请检查 {env_name} 是否正确，或确认远端仓库里的加密 bundle 没有损坏。"
+                "未找到账号池仓库地址。请先显式执行一次 `sclaude push <REPO>` 或 `sclaude pull <REPO>`，或设置环境变量 {env_name}。"
             )
         } else {
             format!(
-                "Failed to decrypt the account pool. Check whether {env_name} is correct and whether the encrypted bundle in the repository is intact."
+                "No account-pool repository configured. Run `sclaude push <REPO>` or `sclaude pull <REPO>` once, or set {env_name}."
             )
-        }
-    }
-
-    pub fn repo_sync_clone_failed(&self, repo: &str, status: i32) -> String {
-        if self.is_zh() {
-            format!("克隆仓库失败：{repo}，退出码：{status}")
-        } else {
-            format!("Repository clone failed: {repo}, status {status}")
-        }
-    }
-
-    pub fn repo_sync_clone_auth_failed(&self, repo: &str) -> String {
-        if self.is_zh() {
-            format!(
-                "无法访问仓库：{repo}。请检查仓库 URL，以及当前 Git 凭据、SSH key 或 PAT 是否有这个私有仓库的读取权限。"
-            )
-        } else {
-            format!(
-                "Cannot access repository: {repo}. Check the repository URL and whether your current Git credentials, SSH key, or PAT has read access to this private repository."
-            )
-        }
-    }
-
-    pub fn repo_sync_stage_failed(&self, status: i32) -> String {
-        if self.is_zh() {
-            format!("暂存账号池变更失败，退出码：{status}")
-        } else {
-            format!("Staging account-pool changes failed with status {status}")
-        }
-    }
-
-    pub fn repo_sync_status_failed(&self, status: i32) -> String {
-        if self.is_zh() {
-            format!("检查仓库状态失败，退出码：{status}")
-        } else {
-            format!("Checking repository status failed with status {status}")
-        }
-    }
-
-    pub fn repo_sync_commit_failed(&self, status: i32) -> String {
-        if self.is_zh() {
-            format!("提交账号池变更失败，退出码：{status}")
-        } else {
-            format!("Committing account-pool changes failed with status {status}")
-        }
-    }
-
-    pub fn repo_sync_push_failed(&self, repo: &str, status: i32) -> String {
-        if self.is_zh() {
-            format!("推送账号池变更失败：{repo}，退出码：{status}")
-        } else {
-            format!("Pushing account-pool changes failed: {repo}, status {status}")
         }
     }
 

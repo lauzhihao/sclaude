@@ -5,6 +5,7 @@ use chrono::{DateTime, Local, Utc};
 use unicode_width::UnicodeWidthStr;
 
 use super::ClaudeAdapter;
+use super::usage::{AccountFlavor, account_flavor};
 use crate::core::state::{LiveIdentity, State, UsageSnapshot};
 use crate::core::ui as core_ui;
 
@@ -30,11 +31,6 @@ impl ClaudeAdapter {
                 if account_is_usable(&usage) {
                     usable_count += 1;
                 }
-                let plan = account
-                    .plan
-                    .clone()
-                    .or(usage.plan.clone())
-                    .unwrap_or_else(|| ui.unknown().into());
                 vec![
                     if active.is_some_and(|live| {
                         account.email.eq_ignore_ascii_case(&live.email)
@@ -45,7 +41,7 @@ impl ClaudeAdapter {
                         String::new()
                     },
                     account.email.clone(),
-                    plan,
+                    format_account_type(account_flavor(account)),
                     format_quota_percent(usage.five_hour_remaining_percent),
                     format_quota_percent(usage.weekly_remaining_percent),
                     format_reset_on(usage.weekly_refresh_at.as_deref()),
@@ -66,6 +62,14 @@ impl ClaudeAdapter {
                 Some(ui.usable_account_summary(usable_count)),
             )
         }
+    }
+}
+
+fn format_account_type(flavor: AccountFlavor) -> String {
+    let ui = core_ui::messages();
+    match flavor {
+        AccountFlavor::OfficialSubscription => ui.official_subscription_label().into(),
+        AccountFlavor::ThirdPartyApi => ui.third_party_api_label().into(),
     }
 }
 
@@ -309,6 +313,7 @@ mod tests {
         state.accounts.push(AccountRecord {
             id: "acct-1".into(),
             email: "a@example.com".into(),
+            account_kind: Some("oauth".into()),
             auth_path: "/tmp/auth.json".into(),
             ..Default::default()
         });
@@ -334,7 +339,7 @@ mod tests {
         state.accounts.push(AccountRecord {
             id: "acct-1".into(),
             email: "a@example.com".into(),
-            plan: Some("Plus".into()),
+            account_kind: Some("oauth".into()),
             auth_path: "/tmp/auth.json".into(),
             ..Default::default()
         });
@@ -360,5 +365,28 @@ mod tests {
         // clean bottom border (no column dividers)
         assert_eq!(lines.last().and_then(|line| line.chars().next()), Some('└'));
         assert!(!lines.last().unwrap().contains('┴'));
+    }
+
+    #[test]
+    fn render_account_table_shows_type_column_and_na_for_api_accounts() {
+        let adapter = ClaudeAdapter;
+        let mut state = State::default();
+        state.accounts.push(AccountRecord {
+            id: "acct-api".into(),
+            email: "key-1234@poe.com".into(),
+            account_kind: Some("api".into()),
+            auth_path: "/tmp/auth.json".into(),
+            ..Default::default()
+        });
+        state
+            .usage_cache
+            .insert("acct-api".into(), UsageSnapshot::default());
+
+        let rendered = adapter.render_account_table(&state, None);
+
+        assert!(rendered.contains(crate::core::ui::messages().third_party_api_label()));
+        assert!(rendered.contains("key-1234@poe.com"));
+        assert!(rendered.contains(crate::core::ui::messages().na()));
+        assert!(rendered.contains(crate::core::ui::messages().status_ok()));
     }
 }

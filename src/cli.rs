@@ -1,7 +1,7 @@
 use std::env;
 use std::ffi::OsString;
 use std::fmt::Write as _;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
 use clap::{Args, Parser, Subcommand};
@@ -80,9 +80,17 @@ pub struct LoginArgs {
     pub password: Option<String>,
     #[arg(long = "provider", value_name = "PROVIDER_ID")]
     pub provider_id: Option<String>,
-    #[arg(long = "ANTHROPIC_BASE_URL", alias = "anthropic-base-url", value_name = "URL")]
+    #[arg(
+        long = "ANTHROPIC_BASE_URL",
+        alias = "anthropic-base-url",
+        value_name = "URL"
+    )]
     pub anthropic_base_url: Option<String>,
-    #[arg(long = "ANTHROPIC_API_KEY", alias = "anthropic-api-key", value_name = "KEY")]
+    #[arg(
+        long = "ANTHROPIC_API_KEY",
+        alias = "anthropic-api-key",
+        value_name = "KEY"
+    )]
     pub anthropic_api_key: Option<String>,
 }
 
@@ -96,17 +104,13 @@ pub struct AddArgs {
 
 #[derive(Debug, Args)]
 pub struct RepoSyncArgs {
-    #[arg(
-        long,
-        default_value = ".sclaude-account-pool",
-        value_name = "REPO_PATH"
-    )]
-    pub path: String,
+    #[arg(long, value_name = "REPO_PATH")]
+    pub path: Option<String>,
 
     #[arg(short = 'i', value_name = "IDENTITY_FILE")]
     pub identity_file: Option<PathBuf>,
 
-    pub repo: String,
+    pub repo: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -131,6 +135,8 @@ pub struct UpdateArgs {
 pub struct ImportAuthArgs {
     pub path: PathBuf,
 }
+
+const REPO_SYNC_REPO_ENV: &str = "SCLAUDE_POOL_REPO";
 
 impl Cli {
     pub fn parse_args() -> Self {
@@ -291,34 +297,36 @@ pub fn run(cli: Cli) -> Result<i32> {
             0
         }
         Command::Push(args) => {
+            let repo = resolve_repo_sync_repo(&state_dir, args.repo.as_deref())?;
             let outcome = adapter.push_account_pool(
                 &state,
-                &args.repo,
-                Some(&args.path),
+                &repo,
+                args.path.as_deref(),
                 args.identity_file.as_deref(),
             )?;
             if outcome.changed {
                 println!(
                     "{}",
-                    ui.repo_push_completed(&args.repo, outcome.exported_accounts)
+                    ui.repo_push_completed(&repo, outcome.exported_accounts)
                 );
             } else {
-                println!("{}", ui.repo_push_no_changes(&args.repo));
+                println!("{}", ui.repo_push_no_changes(&repo));
             }
             0
         }
         Command::Pull(args) => {
+            let repo = resolve_repo_sync_repo(&state_dir, args.repo.as_deref())?;
             let outcome = adapter.pull_account_pool(
                 &state_dir,
                 &mut state,
-                &args.repo,
-                Some(&args.path),
+                &repo,
+                args.path.as_deref(),
                 args.identity_file.as_deref(),
             )?;
             storage::save_state(&state_dir, &state)?;
             println!(
                 "{}",
-                ui.repo_pull_completed(&args.repo, outcome.imported_accounts)
+                ui.repo_pull_completed(&repo, outcome.imported_accounts)
             );
             adapter.refresh_all_accounts(&mut state);
             storage::save_state(&state_dir, &state)?;
@@ -470,6 +478,48 @@ fn print_selection(prefix: &str, account: &AccountRecord, usage: &UsageSnapshot)
     );
 }
 
+fn resolve_repo_sync_repo(state_dir: &Path, cli_repo: Option<&str>) -> Result<String> {
+    if let Some(repo) = cli_repo.map(str::trim).filter(|value| !value.is_empty()) {
+        persist_repo_sync_repo(state_dir, repo)?;
+        return Ok(repo.to_string());
+    }
+
+    let env_repo = env::var(REPO_SYNC_REPO_ENV).ok();
+    let config = storage::load_repo_sync_config(state_dir)?;
+    if let Some(repo) =
+        resolve_repo_sync_repo_source(None, env_repo.as_deref(), config.last_repo.as_deref())
+            .map(ToOwned::to_owned)
+    {
+        return Ok(repo);
+    }
+
+    bail!(
+        "{}",
+        ui::messages().repo_sync_repo_required(REPO_SYNC_REPO_ENV)
+    );
+}
+
+fn resolve_repo_sync_repo_source<'a>(
+    cli_repo: Option<&'a str>,
+    env_repo: Option<&'a str>,
+    saved_repo: Option<&'a str>,
+) -> Option<&'a str> {
+    cli_repo
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or_else(|| env_repo.map(str::trim).filter(|value| !value.is_empty()))
+        .or_else(|| saved_repo.map(str::trim).filter(|value| !value.is_empty()))
+}
+
+fn persist_repo_sync_repo(state_dir: &Path, repo: &str) -> Result<()> {
+    let mut config = storage::load_repo_sync_config(state_dir)?;
+    if config.last_repo.as_deref() == Some(repo) {
+        return Ok(());
+    }
+    config.last_repo = Some(repo.to_string());
+    storage::save_repo_sync_config(state_dir, &config)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HelpTopic {
     Root,
@@ -597,10 +647,14 @@ fn render_help_en(topic: HelpTopic) -> String {
                 "  rm           Remove a stored account by displayed label"
             )
             .unwrap();
-            writeln!(&mut out, "  list         Show the latest account quotas").unwrap();
             writeln!(
                 &mut out,
-                "  refresh      Refresh live usage for all known accounts"
+                "  list         Show stored accounts and latest status"
+            )
+            .unwrap();
+            writeln!(
+                &mut out,
+                "  refresh      Refresh latest status for all known accounts"
             )
             .unwrap();
             writeln!(
@@ -691,8 +745,16 @@ fn render_help_en(topic: HelpTopic) -> String {
             writeln!(&mut out, "  sclaude add [OPTIONS]").unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "Options:").unwrap();
-            writeln!(&mut out, "      --oauth                Use Claude official OAuth login").unwrap();
-            writeln!(&mut out, "      --api                  Add one API-backed account instead of OAuth").unwrap();
+            writeln!(
+                &mut out,
+                "      --oauth                Use Claude official OAuth login"
+            )
+            .unwrap();
+            writeln!(
+                &mut out,
+                "      --api                  Add one API-backed account instead of OAuth"
+            )
+            .unwrap();
             writeln!(
                 &mut out,
                 "      --provider <PROVIDER_ID>  Required with --api; used for display labels such as key-xxxx@poe.com"
@@ -730,7 +792,11 @@ fn render_help_en(topic: HelpTopic) -> String {
             writeln!(&mut out, "  sclaude login [OPTIONS]").unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "Options:").unwrap();
-            writeln!(&mut out, "      --oauth                Use Claude official OAuth login").unwrap();
+            writeln!(
+                &mut out,
+                "      --oauth                Use Claude official OAuth login"
+            )
+            .unwrap();
             writeln!(
                 &mut out,
                 "      --api                  Add one API-backed account instead of OAuth"
@@ -765,12 +831,12 @@ fn render_help_en(topic: HelpTopic) -> String {
         }
         HelpTopic::Push => {
             writeln!(&mut out, "Usage:").unwrap();
-            writeln!(&mut out, "  sclaude push [OPTIONS] <REPO>").unwrap();
+            writeln!(&mut out, "  sclaude push [OPTIONS] [REPO]").unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "Arguments:").unwrap();
             writeln!(
                 &mut out,
-                "  <REPO>  Git remote URL or local repository path"
+                "  [REPO]  Git remote URL or local repository path; remembered after explicit use"
             )
             .unwrap();
             writeln!(&mut out).unwrap();
@@ -791,16 +857,26 @@ fn render_help_en(topic: HelpTopic) -> String {
                 "  SCLAUDE_POOL_KEY  Symmetric key source for encrypting the account pool"
             )
             .unwrap();
+            writeln!(
+                &mut out,
+                "  SCLAUDE_POOL_PATH Repository subdirectory used for the account pool when --path is omitted"
+            )
+            .unwrap();
+            writeln!(
+                &mut out,
+                "  SCLAUDE_POOL_REPO Repository used when [REPO] is omitted"
+            )
+            .unwrap();
             writeln!(&mut out, "  -h, --help            Print help").unwrap();
         }
         HelpTopic::Pull => {
             writeln!(&mut out, "Usage:").unwrap();
-            writeln!(&mut out, "  sclaude pull [OPTIONS] <REPO>").unwrap();
+            writeln!(&mut out, "  sclaude pull [OPTIONS] [REPO]").unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "Arguments:").unwrap();
             writeln!(
                 &mut out,
-                "  <REPO>  Git remote URL or local repository path"
+                "  [REPO]  Git remote URL or local repository path; remembered after explicit use"
             )
             .unwrap();
             writeln!(&mut out).unwrap();
@@ -819,6 +895,16 @@ fn render_help_en(topic: HelpTopic) -> String {
             writeln!(
                 &mut out,
                 "  SCLAUDE_POOL_KEY  Symmetric key source for decrypting the account pool"
+            )
+            .unwrap();
+            writeln!(
+                &mut out,
+                "  SCLAUDE_POOL_PATH Repository subdirectory used for the account pool when --path is omitted"
+            )
+            .unwrap();
+            writeln!(
+                &mut out,
+                "  SCLAUDE_POOL_REPO Repository used when [REPO] is omitted"
             )
             .unwrap();
             writeln!(&mut out, "  -h, --help            Print help").unwrap();
@@ -916,14 +1002,22 @@ fn render_help_zh(topic: HelpTopic) -> String {
             )
             .unwrap();
             writeln!(&mut out, "  auto         切换到最佳账号，但不启动 Claude").unwrap();
-            writeln!(&mut out, "  add          通过与 `login` 相同的流程新增一个账号").unwrap();
-            writeln!(&mut out, "  login        通过 OAuth 或 API 凭据新增一个账号").unwrap();
+            writeln!(
+                &mut out,
+                "  add          通过与 `login` 相同的流程新增一个账号"
+            )
+            .unwrap();
+            writeln!(
+                &mut out,
+                "  login        通过 OAuth 或 API 凭据新增一个账号"
+            )
+            .unwrap();
             writeln!(&mut out, "  push         把本地账号池推送到 Git 仓库").unwrap();
             writeln!(&mut out, "  pull         从 Git 仓库拉取账号池").unwrap();
             writeln!(&mut out, "  use          按 `list` 中显示的标识切换账号").unwrap();
             writeln!(&mut out, "  rm           按 `list` 中显示的标识删除账号").unwrap();
-            writeln!(&mut out, "  list         显示最新账号额度").unwrap();
-            writeln!(&mut out, "  refresh      刷新所有已知账号的实时额度").unwrap();
+            writeln!(&mut out, "  list         显示已保存账号及其最新状态").unwrap();
+            writeln!(&mut out, "  refresh      刷新所有已知账号的最新状态").unwrap();
             writeln!(&mut out, "  update       自更新 sclaude [别名：upgrade]").unwrap();
             writeln!(&mut out, "  import-auth  导入 Claude 认证文件或配置目录").unwrap();
             writeln!(&mut out, "  import-known 导入默认已知认证来源").unwrap();
@@ -984,8 +1078,16 @@ fn render_help_zh(topic: HelpTopic) -> String {
             writeln!(&mut out, "  sclaude add [选项]").unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "选项：").unwrap();
-            writeln!(&mut out, "      --oauth                使用 Claude 官方 OAuth 登录").unwrap();
-            writeln!(&mut out, "      --api                  添加一个 API 模式账号").unwrap();
+            writeln!(
+                &mut out,
+                "      --oauth                使用 Claude 官方 OAuth 登录"
+            )
+            .unwrap();
+            writeln!(
+                &mut out,
+                "      --api                  添加一个 API 模式账号"
+            )
+            .unwrap();
             writeln!(
                 &mut out,
                 "      --provider <PROVIDER_ID>  配合 --api 使用；用于显示成 key-xxxx@poe.com 这类标识"
@@ -1011,7 +1113,11 @@ fn render_help_zh(topic: HelpTopic) -> String {
                 "      --password <PASS>      兼容保留参数，当前会被忽略"
             )
             .unwrap();
-            writeln!(&mut out, "      --switch               登录完成后切换到新账号").unwrap();
+            writeln!(
+                &mut out,
+                "      --switch               登录完成后切换到新账号"
+            )
+            .unwrap();
             writeln!(&mut out, "  -h, --help                 显示帮助").unwrap();
         }
         HelpTopic::Login => {
@@ -1019,8 +1125,16 @@ fn render_help_zh(topic: HelpTopic) -> String {
             writeln!(&mut out, "  sclaude login [选项]").unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "选项：").unwrap();
-            writeln!(&mut out, "      --oauth                使用 Claude 官方 OAuth 登录").unwrap();
-            writeln!(&mut out, "      --api                  添加一个 API 模式账号").unwrap();
+            writeln!(
+                &mut out,
+                "      --oauth                使用 Claude 官方 OAuth 登录"
+            )
+            .unwrap();
+            writeln!(
+                &mut out,
+                "      --api                  添加一个 API 模式账号"
+            )
+            .unwrap();
             writeln!(
                 &mut out,
                 "      --provider <PROVIDER_ID>  配合 --api 使用；用于显示成 key-xxxx@poe.com 这类标识"
@@ -1050,10 +1164,14 @@ fn render_help_zh(topic: HelpTopic) -> String {
         }
         HelpTopic::Push => {
             writeln!(&mut out, "用法：").unwrap();
-            writeln!(&mut out, "  sclaude push [选项] <REPO>").unwrap();
+            writeln!(&mut out, "  sclaude push [选项] [REPO]").unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "参数：").unwrap();
-            writeln!(&mut out, "  <REPO>  Git 远端 URL 或本地仓库路径").unwrap();
+            writeln!(
+                &mut out,
+                "  [REPO]  Git 远端 URL 或本地仓库路径；显式传入后会记住"
+            )
+            .unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "选项：").unwrap();
             writeln!(
@@ -1068,14 +1186,28 @@ fn render_help_zh(topic: HelpTopic) -> String {
             .unwrap();
             writeln!(&mut out, "环境变量：").unwrap();
             writeln!(&mut out, "  SCLAUDE_POOL_KEY  用于加密账号池的对称密钥来源").unwrap();
+            writeln!(
+                &mut out,
+                "  SCLAUDE_POOL_PATH 未传 --path 时，仓库内账号池子目录来源"
+            )
+            .unwrap();
+            writeln!(
+                &mut out,
+                "  SCLAUDE_POOL_REPO 未传 [REPO] 时，账号池仓库地址来源"
+            )
+            .unwrap();
             writeln!(&mut out, "  -h, --help            显示帮助").unwrap();
         }
         HelpTopic::Pull => {
             writeln!(&mut out, "用法：").unwrap();
-            writeln!(&mut out, "  sclaude pull [选项] <REPO>").unwrap();
+            writeln!(&mut out, "  sclaude pull [选项] [REPO]").unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "参数：").unwrap();
-            writeln!(&mut out, "  <REPO>  Git 远端 URL 或本地仓库路径").unwrap();
+            writeln!(
+                &mut out,
+                "  [REPO]  Git 远端 URL 或本地仓库路径；显式传入后会记住"
+            )
+            .unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "选项：").unwrap();
             writeln!(
@@ -1090,6 +1222,16 @@ fn render_help_zh(topic: HelpTopic) -> String {
             .unwrap();
             writeln!(&mut out, "环境变量：").unwrap();
             writeln!(&mut out, "  SCLAUDE_POOL_KEY  用于解密账号池的对称密钥来源").unwrap();
+            writeln!(
+                &mut out,
+                "  SCLAUDE_POOL_PATH 未传 --path 时，仓库内账号池子目录来源"
+            )
+            .unwrap();
+            writeln!(
+                &mut out,
+                "  SCLAUDE_POOL_REPO 未传 [REPO] 时，账号池仓库地址来源"
+            )
+            .unwrap();
             writeln!(&mut out, "  -h, --help            显示帮助").unwrap();
         }
         HelpTopic::Use => {
@@ -1163,4 +1305,43 @@ fn render_help_zh(topic: HelpTopic) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use super::{persist_repo_sync_repo, resolve_repo_sync_repo_source};
+    use crate::core::storage;
+
+    #[test]
+    fn repo_sync_repo_source_prefers_cli_then_env_then_saved() {
+        assert_eq!(
+            resolve_repo_sync_repo_source(Some("git@cli"), Some("git@env"), Some("git@saved")),
+            Some("git@cli")
+        );
+        assert_eq!(
+            resolve_repo_sync_repo_source(None, Some("git@env"), Some("git@saved")),
+            Some("git@env")
+        );
+        assert_eq!(
+            resolve_repo_sync_repo_source(None, None, Some("git@saved")),
+            Some("git@saved")
+        );
+    }
+
+    #[test]
+    fn persist_repo_sync_repo_updates_config_file() {
+        let state_dir = std::env::temp_dir().join(format!("sclaude-repo-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&state_dir).expect("create temp dir");
+
+        persist_repo_sync_repo(&state_dir, "git@github.com:org/repo.git").expect("persist repo");
+        let config = storage::load_repo_sync_config(&state_dir).expect("load config");
+
+        assert_eq!(
+            config.last_repo.as_deref(),
+            Some("git@github.com:org/repo.git")
+        );
+        let _ = fs::remove_dir_all(&state_dir);
+    }
 }

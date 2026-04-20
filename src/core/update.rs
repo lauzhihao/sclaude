@@ -96,12 +96,8 @@ pub fn self_update(force: bool) -> Result<UpdateOutcome> {
 }
 
 fn resolve_release_asset() -> Result<ReleaseAsset> {
-    let repo = env::var("SCLAUDE_REPO")
-        .or_else(|_| env::var("AUTO_CODEX_REPO"))
-        .unwrap_or_else(|_| DEFAULT_REPO.to_string());
-    let tag = if let Ok(value) =
-        env::var("SCLAUDE_VERSION").or_else(|_| env::var("AUTO_CODEX_VERSION"))
-    {
+    let repo = env::var("SCLAUDE_REPO").unwrap_or_else(|_| DEFAULT_REPO.to_string());
+    let tag = if let Ok(value) = env::var("SCLAUDE_VERSION") {
         normalize_tag(&value)
     } else {
         fetch_latest_release_tag(&repo)?

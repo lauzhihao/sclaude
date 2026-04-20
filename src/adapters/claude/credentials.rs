@@ -52,7 +52,7 @@ pub(super) fn capture_credential_bundle(
 
 pub(super) fn save_credential_bundle(
     profile_root: &Path,
-    key: &str,
+    #[cfg_attr(not(target_os = "macos"), allow(unused_variables))] key: &str,
     bundle: &ClaudeCredentialBundle,
 ) -> Result<()> {
     let payload =
@@ -84,7 +84,7 @@ pub(super) fn save_credential_bundle(
 
 pub(super) fn load_credential_bundle(
     profile_root: &Path,
-    key: &str,
+    #[cfg_attr(not(target_os = "macos"), allow(unused_variables))] key: &str,
 ) -> Result<Option<ClaudeCredentialBundle>> {
     #[cfg(target_os = "macos")]
     {
@@ -123,7 +123,10 @@ pub(super) fn load_credential_bundle(
     })
 }
 
-pub(super) fn delete_credential_bundle(profile_root: &Path, key: &str) -> Result<()> {
+pub(super) fn delete_credential_bundle(
+    profile_root: &Path,
+    #[cfg_attr(not(target_os = "macos"), allow(unused_variables))] key: &str,
+) -> Result<()> {
     #[cfg(target_os = "macos")]
     {
         match security_framework::passwords::delete_generic_password(SCLAUDE_BUNDLE_SERVICE, key) {
