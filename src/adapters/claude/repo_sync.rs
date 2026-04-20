@@ -58,13 +58,15 @@ impl ClaudeAdapter {
 
         println!("{}", ui.repo_push_start(repo));
         if bundle_path.exists() {
-            let existing = decrypt_bundle_file(&bundle_path, &bundle_key)?;
-            if existing == bundle_bytes {
-                return Ok(PushOutcome {
-                    changed: false,
-                    exported_accounts: state.accounts.len(),
-                });
+            if let Ok(existing) = decrypt_bundle_file(&bundle_path, &bundle_key) {
+                if existing == bundle_bytes {
+                    return Ok(PushOutcome {
+                        changed: false,
+                        exported_accounts: state.accounts.len(),
+                    });
+                }
             }
+            // 解密失败（文件损坏、格式不兼容、key 不匹配）→ 忽略，直接覆盖
         }
 
         prepare_bundle_dir(&bundle_root)?;
