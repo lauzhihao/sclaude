@@ -1,10 +1,30 @@
+use std::fs;
 use std::path::Path;
+use std::time::Duration;
 
+use anyhow::Result;
+use reqwest::blocking::Client;
+use reqwest::header::{HeaderMap, HeaderValue};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::ClaudeAdapter;
 use super::paths::profile_root_for_account;
 use crate::core::state::{AccountRecord, State, UsageSnapshot};
+
+// API 响应结构体
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct OauthUsageResponse {
+    five_hour: Option<OauthUsageSlot>,
+    seven_day: Option<OauthUsageSlot>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct OauthUsageSlot {
+    utilization: f64,
+    #[serde(rename = "resets_at")]
+    resets_at: Option<String>,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum AccountFlavor {
@@ -21,6 +41,43 @@ pub(super) fn account_flavor(account: &AccountRecord) -> AccountFlavor {
         }
         _ => AccountFlavor::OfficialSubscription,
     }
+}
+
+// OAuth token 读取：从 {profile_root}/.credentials.json 读取 .claudeAiOauth.accessToken
+fn read_oauth_token(profile_root: &Path) -> Option<String> {
+    let cred_path = profile_root.join(".credentials.json");
+    let content = fs::read_to_string(&cred_path).ok()?;
+    let json: Value = serde_json::from_str(&content).ok()?;
+    json.get("claudeAiOauth")
+        .and_then(|oauth| oauth.get("accessToken"))
+        .and_then(Value::as_str)
+        .map(|s| s.to_string())
+}
+
+// OAuth usage API 查询
+fn fetch_oauth_usage(token: &str) -> Result<OauthUsageResponse> {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "Authorization",
+        HeaderValue::from_str(&format!("Bearer {}", token))?,
+    );
+    headers.insert(
+        "anthropic-beta",
+        HeaderValue::from_static("oauth-2025-04-20"),
+    );
+
+    let client = Client::builder()
+        .default_headers(headers)
+        .timeout(Duration::from_secs(10))
+        .build()?;
+
+    let response = client
+        .get("https://api.anthropic.com/api/oauth/usage")
+        .send()?
+        .error_for_status()?
+        .json::<OauthUsageResponse>()?;
+
+    Ok(response)
 }
 
 impl ClaudeAdapter {
@@ -64,11 +121,39 @@ impl ClaudeAdapter {
 
         let profile_root = profile_root_for_account(account);
         match self.read_auth_status(&profile_root) {
-            Ok(status) => UsageSnapshot {
-                plan: status.subscription_type.or_else(|| account.plan.clone()),
-                last_synced_at: synced_at,
-                ..UsageSnapshot::default()
-            },
+            Ok(status) => {
+                let mut result = UsageSnapshot {
+                    plan: status.subscription_type.or_else(|| account.plan.clone()),
+                    last_synced_at: synced_at,
+                    ..UsageSnapshot::default()
+                };
+
+                // 尝试获取实时 OAuth usage 配额信息
+                if let Some(token) = read_oauth_token(&profile_root) {
+                    match fetch_oauth_usage(&token) {
+                        Ok(usage) => {
+                            // 处理 5 小时配额
+                            if let Some(slot) = usage.five_hour {
+                                result.five_hour_remaining_percent =
+                                    Some((100.0 - slot.utilization).round() as i64);
+                                result.five_hour_refresh_at = slot.resets_at;
+                            }
+                            // 处理 7 天配额
+                            if let Some(slot) = usage.seven_day {
+                                result.weekly_remaining_percent =
+                                    Some((100.0 - slot.utilization).round() as i64);
+                                result.weekly_refresh_at = slot.resets_at;
+                            }
+                        }
+                        Err(e) => {
+                            // 静默降级：仅记录错误，不影响主流程
+                            result.last_sync_error = Some(format!("Failed to fetch OAuth usage: {}", e));
+                        }
+                    }
+                }
+
+                result
+            }
             Err(_) if self.profile_uses_api_key(account) => UsageSnapshot {
                 plan: account.plan.clone(),
                 last_synced_at: synced_at,
