@@ -236,27 +236,12 @@ impl ClaudeAdapter {
             .with_context(|| format!("failed to execute {}", claude_bin.display()))?;
         if !status.success() {
             let _ = fs::remove_dir_all(&tmp_home);
-            bail!("{}", ui.codex_login_failed(status.code().unwrap_or(1)));
+            bail!("{}", ui.claude_login_failed(status.code().unwrap_or(1)));
         }
 
         let record = self.import_auth_path(state_dir, state, &tmp_home)?;
         let _ = fs::remove_dir_all(&tmp_home);
         Ok(record)
-    }
-
-    fn wait_for_enter_after_signup(&self) -> Result<()> {
-        let ui = core_ui::messages();
-        println!("{}", ui.add_finish_signup_then_continue());
-        if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
-            return Ok(());
-        }
-        print!("{}", ui.add_waiting_enter());
-        io::stdout().flush().context("failed to flush stdout")?;
-        let mut line = String::new();
-        io::stdin()
-            .read_line(&mut line)
-            .context("failed to read continuation input")?;
-        Ok(())
     }
 
     pub fn run_api_key_login(
@@ -367,7 +352,7 @@ impl ClaudeAdapter {
 
         self.offer_to_install_claude()?;
         find_claude_bin()
-            .ok_or_else(|| anyhow::anyhow!(core_ui::messages().codex_install_still_missing()))
+            .ok_or_else(|| anyhow::anyhow!(core_ui::messages().claude_install_still_missing()))
     }
 
     fn offer_to_install_claude(&self) -> Result<()> {
@@ -375,14 +360,14 @@ impl ClaudeAdapter {
         let install_line = install.display();
         let ui = core_ui::messages();
 
-        eprintln!("{}", ui.missing_codex());
+        eprintln!("{}", ui.missing_claude());
         eprintln!("{}", ui.install_hint());
         eprintln!();
         eprintln!("{install_line}");
         eprintln!();
 
         let Some(installer_bin) = find_in_path(&install.program) else {
-            eprintln!("{}", ui.codex_install_tool_missing(&install.program));
+            eprintln!("{}", ui.claude_install_tool_missing(&install.program));
             eprintln!();
             eprintln!("{}", ui.manual_install());
             eprintln!();
@@ -411,7 +396,7 @@ impl ClaudeAdapter {
                         .status()
                         .with_context(|| format!("failed to execute `{install_line}`"))?;
                     if !status.success() {
-                        bail!("{}", ui.codex_install_failed(status.code().unwrap_or(1)));
+                        bail!("{}", ui.claude_install_failed(status.code().unwrap_or(1)));
                     }
                     return Ok(());
                 }

@@ -715,7 +715,7 @@ fn render_help_en(topic: HelpTopic) -> String {
             .unwrap();
             writeln!(
                 &mut out,
-                "      --password <PASS>      Reserved for compatibility with scodex"
+                "      --password <PASS>      Reserved for compatibility; currently ignored"
             )
             .unwrap();
             writeln!(
@@ -758,7 +758,7 @@ fn render_help_en(topic: HelpTopic) -> String {
             .unwrap();
             writeln!(
                 &mut out,
-                "      --password <PASS>      Reserved for compatibility with scodex"
+                "      --password <PASS>      Reserved for compatibility; currently ignored"
             )
             .unwrap();
             writeln!(&mut out, "  -h, --help                 Print help").unwrap();
@@ -1008,7 +1008,7 @@ fn render_help_zh(topic: HelpTopic) -> String {
             .unwrap();
             writeln!(
                 &mut out,
-                "      --password <PASS>      为兼容 scodex 保留"
+                "      --password <PASS>      兼容保留参数，当前会被忽略"
             )
             .unwrap();
             writeln!(&mut out, "      --switch               登录完成后切换到新账号").unwrap();
@@ -1043,7 +1043,7 @@ fn render_help_zh(topic: HelpTopic) -> String {
             .unwrap();
             writeln!(
                 &mut out,
-                "      --password <PASS>      为兼容 scodex 保留"
+                "      --password <PASS>      兼容保留参数，当前会被忽略"
             )
             .unwrap();
             writeln!(&mut out, "  -h, --help                 显示帮助").unwrap();

@@ -263,22 +263,6 @@ impl Messages {
         }
     }
 
-    pub fn login_open_url(&self) -> &'static str {
-        if self.is_zh() {
-            "请在任意可用浏览器的设备上打开上面输出的 URL 并完成登录。"
-        } else {
-            "Open the printed URL on any browser-enabled machine and finish the login there."
-        }
-    }
-
-    pub fn login_headless_ip(&self, ip: &str) -> String {
-        if self.is_zh() {
-            format!("当前无头主机局域网 IP：{ip}")
-        } else {
-            format!("Headless host LAN IP: {ip}")
-        }
-    }
-
     pub fn resume_session(&self) -> &'static str {
         if self.is_zh() {
             "正在恢复当前目录的最新 Claude 会话。"
@@ -303,7 +287,7 @@ impl Messages {
         }
     }
 
-    pub fn missing_codex(&self) -> &'static str {
+    pub fn missing_claude(&self) -> &'static str {
         if self.is_zh() {
             "未找到 claude。这会导致 sclaude 无法正常工作。"
         } else {
@@ -343,7 +327,7 @@ impl Messages {
         }
     }
 
-    pub fn codex_install_still_missing(&self) -> &'static str {
+    pub fn claude_install_still_missing(&self) -> &'static str {
         if self.is_zh() {
             "Claude Code CLI 安装似乎已完成，但当前仍然找不到 `claude`。请重启 shell，或显式设置 CLAUDE_BIN。"
         } else {
@@ -351,7 +335,7 @@ impl Messages {
         }
     }
 
-    pub fn codex_install_failed(&self, status: i32) -> String {
+    pub fn claude_install_failed(&self, status: i32) -> String {
         if self.is_zh() {
             format!("Claude Code CLI 安装失败，退出码：{status}")
         } else {
@@ -359,7 +343,7 @@ impl Messages {
         }
     }
 
-    pub fn codex_install_tool_missing(&self, tool: &str) -> String {
+    pub fn claude_install_tool_missing(&self, tool: &str) -> String {
         if self.is_zh() {
             format!("未找到 {tool}。要自动安装 Claude Code CLI，当前机器需要先安装 Node.js/npm。")
         } else {
@@ -369,182 +353,11 @@ impl Messages {
         }
     }
 
-    pub fn codex_login_failed(&self, status: i32) -> String {
+    pub fn claude_login_failed(&self, status: i32) -> String {
         if self.is_zh() {
             format!("claude 登录失败，退出码：{status}")
         } else {
             format!("claude auth login failed with status {status}")
-        }
-    }
-
-    pub fn login_missing_auth(&self) -> &'static str {
-        if self.is_zh() {
-            "登录流程已结束，但没有生成 Claude 登录配置。"
-        } else {
-            "Login finished but no Claude auth profile was produced."
-        }
-    }
-
-    pub fn login_autofill_start(&self) -> &'static str {
-        if self.is_zh() {
-            "正在启动 Claude 登录兼容流程，并打开浏览器辅助完成登录。"
-        } else {
-            "Starting the Claude login compatibility flow and opening a browser-assisted login window."
-        }
-    }
-
-    pub fn login_autofill_prompt(&self, url: &str, code: Option<&str>) -> String {
-        match (self.is_zh(), code) {
-            (true, Some(code)) => format!("设备授权链接：{url}\n一次性 code：{code}"),
-            (true, None) => format!("设备授权链接：{url}"),
-            (false, Some(code)) => format!("Device URL: {url}\nOne-time code: {code}"),
-            (false, None) => format!("Device URL: {url}"),
-        }
-    }
-
-    pub fn login_autofill_waiting_consent(&self) -> &'static str {
-        if self.is_zh() {
-            "登录信息已填充。请在刚打开的浏览器窗口里完成最后一次确认。"
-        } else {
-            "Login details are filled in. Complete the final confirmation in the opened browser window."
-        }
-    }
-
-    pub fn login_autofill_no_chrome(&self) -> &'static str {
-        if self.is_zh() {
-            "未检测到 Chrome 或 Chromium，无法执行浏览器辅助登录。请安装 Chrome，或改用 `sclaude login`（不带 --oauth）。"
-        } else {
-            "Chrome or Chromium not detected; cannot run browser-assisted login. Install Chrome or run `sclaude login` without --oauth."
-        }
-    }
-
-    pub fn login_autofill_missing_credentials(&self) -> &'static str {
-        if self.is_zh() {
-            "使用 --oauth 时至少需要传入 --username 作为 Claude 登录邮箱提示。"
-        } else {
-            "--oauth requires at least --username as the Claude login email hint."
-        }
-    }
-
-    pub fn add_opening_signup(&self) -> &'static str {
-        if self.is_zh() {
-            "正在打开 Claude 账号页面。"
-        } else {
-            "Opening the Claude account page."
-        }
-    }
-
-    pub fn add_opened_signup(&self, url: &str) -> String {
-        if self.is_zh() {
-            format!("已尝试打开：{url}")
-        } else {
-            format!("Opened: {url}")
-        }
-    }
-
-    pub fn add_no_gui_open_manually(&self, url: &str) -> String {
-        if self.is_zh() {
-            format!("未检测到可用图形界面。请在另一台可用浏览器的设备上打开：{url}")
-        } else {
-            format!(
-                "No GUI environment detected. Open this URL on another browser-enabled device: {url}"
-            )
-        }
-    }
-
-    pub fn add_browser_open_failed(&self, url: &str) -> String {
-        if self.is_zh() {
-            format!("未能自动打开浏览器。请手动访问：{url}")
-        } else {
-            format!("Could not open a browser automatically. Please visit: {url}")
-        }
-    }
-
-    pub fn add_finish_signup_then_continue(&self) -> &'static str {
-        if self.is_zh() {
-            "完成注册或登录后，按回车继续。"
-        } else {
-            "After you finish signup or login, press Enter to continue."
-        }
-    }
-
-    pub fn add_waiting_enter(&self) -> &'static str {
-        if self.is_zh() {
-            "按回车继续："
-        } else {
-            "Press Enter to continue: "
-        }
-    }
-
-    pub fn deploy_start(&self, target: &str) -> String {
-        if self.is_zh() {
-            format!("正在把当前 Claude 配置上传到 {target}")
-        } else {
-            format!("Deploying the current Claude profile to {target}")
-        }
-    }
-
-    pub fn deploy_completed(&self, target: &str) -> String {
-        if self.is_zh() {
-            format!("已把当前 Claude 配置上传到 {target}")
-        } else {
-            format!("Deployed the current Claude profile to {target}")
-        }
-    }
-
-    pub fn deploy_missing_auth(&self, path: &Path) -> String {
-        if self.is_zh() {
-            format!("当前可用的 Claude 配置目录不存在：{}", path.display())
-        } else {
-            format!("Current Claude profile not found: {}", path.display())
-        }
-    }
-
-    pub fn deploy_invalid_target(&self, target: &str) -> String {
-        if self.is_zh() {
-            format!("无效的远端目标：{target}。请使用 user@host:/target_path")
-        } else {
-            format!("Invalid remote target: {target}. Use user@host:/target_path")
-        }
-    }
-
-    pub fn deploy_missing_ssh(&self) -> &'static str {
-        if self.is_zh() {
-            "未找到 ssh。执行 `sclaude deploy` 需要它。"
-        } else {
-            "ssh not found; `sclaude deploy` requires it."
-        }
-    }
-
-    pub fn deploy_missing_scp(&self) -> &'static str {
-        if self.is_zh() {
-            "未找到 scp。执行 `sclaude deploy` 需要它。"
-        } else {
-            "scp not found; `sclaude deploy` requires it."
-        }
-    }
-
-    pub fn deploy_identity_not_found(&self, path: &Path) -> String {
-        if self.is_zh() {
-            format!("SSH 身份文件不存在：{}", path.display())
-        } else {
-            format!("SSH identity file not found: {}", path.display())
-        }
-    }
-
-    pub fn deploy_prepare_remote_dir_failed(&self, status: i32) -> String {
-        if self.is_zh() {
-            format!("远端目录准备失败，退出码：{status}")
-        } else {
-            format!("Preparing the remote directory failed with status {status}")
-        }
-    }
-
-    pub fn deploy_copy_failed(&self, status: i32) -> String {
-        if self.is_zh() {
-            format!("凭证复制失败，退出码：{status}")
-        } else {
-            format!("Credential copy failed with status {status}")
         }
     }
 
