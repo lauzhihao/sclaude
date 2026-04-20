@@ -7,6 +7,10 @@ use reqwest::blocking::Client;
 use reqwest::header::{HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+#[cfg(target_os = "macos")]
+use sha2::Sha256;
+#[cfg(target_os = "macos")]
+use sha2::Digest;
 
 use super::ClaudeAdapter;
 use super::paths::profile_root_for_account;
@@ -44,14 +48,63 @@ pub(super) fn account_flavor(account: &AccountRecord) -> AccountFlavor {
 }
 
 // OAuth token 读取：从 {profile_root}/.credentials.json 读取 .claudeAiOauth.accessToken
+// 在 macOS 上，如果文件不存在，尝试从 Keychain 读取（迁移兼容性）
 fn read_oauth_token(profile_root: &Path) -> Option<String> {
     let cred_path = profile_root.join(".credentials.json");
-    let content = fs::read_to_string(&cred_path).ok()?;
-    let json: Value = serde_json::from_str(&content).ok()?;
-    json.get("claudeAiOauth")
-        .and_then(|oauth| oauth.get("accessToken"))
-        .and_then(Value::as_str)
-        .map(|s| s.to_string())
+
+    // 优先读文件
+    if let Ok(content) = fs::read_to_string(&cred_path) {
+        if let Ok(json) = serde_json::from_str::<Value>(&content) {
+            if let Some(token) = json
+                .get("claudeAiOauth")
+                .and_then(|oauth| oauth.get("accessToken"))
+                .and_then(Value::as_str)
+            {
+                return Some(token.to_string());
+            }
+        }
+    }
+
+    // macOS 后备：如果文件不存在，尝试从 Keychain 读取（为了兼容之前的存储方式）
+    #[cfg(target_os = "macos")]
+    {
+        let service = if is_default_system_claude_dir(profile_root) {
+            "Claude Code-credentials".into()
+        } else {
+            let hash = Sha256::digest(profile_root.to_string_lossy().as_bytes());
+            let mut suffix = String::new();
+            for byte in &hash[..4] {
+                suffix.push_str(&format!("{byte:02x}"));
+            }
+            format!("Claude Code-credentials-{suffix}")
+        };
+
+        let account = std::env::var("USER")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| "claude-code-user".into());
+
+        if let Ok(payload) = security_framework::passwords::get_generic_password(&service, &account) {
+            if let Ok(json) = serde_json::from_slice::<Value>(&payload) {
+                if let Some(token) = json
+                    .get("claudeAiOauth")
+                    .and_then(|oauth| oauth.get("accessToken"))
+                    .and_then(Value::as_str)
+                {
+                    return Some(token.to_string());
+                }
+            }
+        }
+    }
+
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn is_default_system_claude_dir(config_dir: &Path) -> bool {
+    std::env::var_os("HOME")
+        .map(|home| std::path::Path::new(&home).join(".claude") == config_dir)
+        .unwrap_or(false)
 }
 
 // OAuth usage API 查询
