@@ -52,57 +52,29 @@ pub(super) fn capture_credential_bundle(
 
 pub(super) fn save_credential_bundle(
     profile_root: &Path,
-    #[cfg_attr(not(target_os = "macos"), allow(unused_variables))] key: &str,
+    #[cfg_attr(not(target_os = "macos"), allow(unused_variables))] _key: &str,
     bundle: &ClaudeCredentialBundle,
 ) -> Result<()> {
     let payload =
         serde_json::to_vec(bundle).context("failed to serialize Claude credential bundle")?;
 
-    #[cfg(target_os = "macos")]
-    {
-        security_framework::passwords::set_generic_password(SCLAUDE_BUNDLE_SERVICE, key, &payload)
-            .map_err(|error| {
-                anyhow::anyhow!("failed to save Claude credential bundle in Keychain: {error}")
-            })?;
-        let _ = fs::remove_file(profile_root.join(CREDENTIAL_BUNDLE_FILE));
-        return Ok(());
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    {
-        fs::create_dir_all(profile_root)
-            .with_context(|| format!("failed to create {}", profile_root.display()))?;
-        fs::write(profile_root.join(CREDENTIAL_BUNDLE_FILE), payload).with_context(|| {
-            format!(
-                "failed to write Claude credential bundle under {}",
-                profile_root.display()
-            )
-        })?;
-        Ok(())
-    }
+    // 在所有平台上统一使用文件存储，避免 macOS Keychain 权限提示
+    fs::create_dir_all(profile_root)
+        .with_context(|| format!("failed to create {}", profile_root.display()))?;
+    fs::write(profile_root.join(CREDENTIAL_BUNDLE_FILE), payload).with_context(|| {
+        format!(
+            "failed to write Claude credential bundle under {}",
+            profile_root.display()
+        )
+    })?;
+    Ok(())
 }
 
 pub(super) fn load_credential_bundle(
     profile_root: &Path,
-    #[cfg_attr(not(target_os = "macos"), allow(unused_variables))] key: &str,
+    #[cfg_attr(not(target_os = "macos"), allow(unused_variables))] _key: &str,
 ) -> Result<Option<ClaudeCredentialBundle>> {
-    #[cfg(target_os = "macos")]
-    {
-        match security_framework::passwords::get_generic_password(SCLAUDE_BUNDLE_SERVICE, key) {
-            Ok(payload) => {
-                return serde_json::from_slice(&payload)
-                    .map(Some)
-                    .context("failed to parse Claude credential bundle from Keychain");
-            }
-            Err(error) if error.code() != -25300 => {
-                return Err(anyhow::anyhow!(
-                    "failed to load Claude credential bundle from Keychain: {error}"
-                ));
-            }
-            Err(_) => {}
-        }
-    }
-
+    // 在所有平台上统一使用文件存储，避免 macOS Keychain 权限提示
     let path = profile_root.join(CREDENTIAL_BUNDLE_FILE);
     let payload = match fs::read(&path) {
         Ok(payload) => payload,
@@ -125,21 +97,9 @@ pub(super) fn load_credential_bundle(
 
 pub(super) fn delete_credential_bundle(
     profile_root: &Path,
-    #[cfg_attr(not(target_os = "macos"), allow(unused_variables))] key: &str,
+    #[cfg_attr(not(target_os = "macos"), allow(unused_variables))] _key: &str,
 ) -> Result<()> {
-    #[cfg(target_os = "macos")]
-    {
-        match security_framework::passwords::delete_generic_password(SCLAUDE_BUNDLE_SERVICE, key) {
-            Ok(()) => {}
-            Err(error) if error.code() == -25300 => {}
-            Err(error) => {
-                return Err(anyhow::anyhow!(
-                    "failed to delete Claude credential bundle from Keychain: {error}"
-                ));
-            }
-        }
-    }
-
+    // 在所有平台上统一使用文件存储，避免 macOS Keychain 权限提示
     let path = profile_root.join(CREDENTIAL_BUNDLE_FILE);
     match fs::remove_file(&path) {
         Ok(()) => Ok(()),
@@ -216,17 +176,12 @@ fn write_secure_credentials(config_dir: &Path, payload: &[u8]) -> Result<()> {
     {
         let service = claude_keychain_service_name(config_dir);
         let account = current_username();
-        match security_framework::passwords::set_generic_password(&service, &account, payload) {
-            Ok(()) => {
-                let _ = fs::remove_file(&fallback_path);
-                return Ok(());
-            }
-            Err(_) => {
-                let _ = security_framework::passwords::delete_generic_password(&service, &account);
-            }
-        }
+        // 在 macOS 上不再写 Keychain，直接写文件避免权限提示
+        // 清理旧的 Keychain item，避免 Claude Code 读到过期数据
+        let _ = security_framework::passwords::delete_generic_password(&service, &account);
     }
 
+    // 所有平台统一写文件。read_secure_credentials 已经优先读文件，行为完全正确
     fs::write(&fallback_path, payload)
         .with_context(|| format!("failed to write {}", fallback_path.display()))
 }
