@@ -145,9 +145,10 @@ impl ClaudeAdapter {
                                 result.weekly_refresh_at = slot.resets_at;
                             }
                         }
-                        Err(e) => {
-                            // 静默降级：仅记录错误，不影响主流程
-                            result.last_sync_error = Some(format!("Failed to fetch OAuth usage: {}", e));
+                        Err(_) => {
+                            // 配额接口失败（网络错误、429 频率限制等）属于暂时性问题，
+                            // 不污染 last_sync_error，避免账号被错误标记为不可用。
+                            // 配额字段保持 None，显示为 N/A。
                         }
                     }
                 }
