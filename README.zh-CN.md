@@ -1,28 +1,28 @@
-# scodex
+# sclaude
 
 [English](./README.md) | [简体中文](./README.zh-CN.md)
 
-`scodex` 会选择当前“立刻可用额度”最合适的 Codex 账号，切换 `~/.codex/auth.json`，然后启动或恢复 Codex。
+`sclaude` 是一个基于 Rust 的 Claude Code CLI wrapper，用来做多账号管理、账号导入、加密账号池同步，以及模型固定入口。
 
-这个仓库只包含代码，不包含账号池数据、额度缓存、本地配置或虚拟环境文件。
+这个仓库只包含代码，不包含账号池数据、额度缓存、本地凭据或机器相关配置。
 
-这个仓库现在只维护 Rust 实现。源码树里只有 `scodex` 这一条受支持的运行时路径。
-
-如果你不喜欢或不习惯使用命令行，可以体验功能更丰富的 GUI 版本：<https://github.com/murongg/ai-accounts-hub>
+如果你更想用 GUI 管理账号，可以参考 <https://github.com/murongg/ai-accounts-hub>。
 
 ## 安装
 
+Unix:
+
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lauzhihao/scodex/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lauzhihao/sclaude/main/install.sh | bash
 ```
 
 Windows PowerShell：
 
 ```powershell
-irm https://raw.githubusercontent.com/lauzhihao/scodex/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/lauzhihao/sclaude/main/install.ps1 | iex
 ```
 
-当前预编译发行目标：
+当前已发布的预编译目标：
 
 - Linux：`x86_64-unknown-linux-musl`
 - macOS：`x86_64-apple-darwin`、`aarch64-apple-darwin`
@@ -30,21 +30,19 @@ irm https://raw.githubusercontent.com/lauzhihao/scodex/main/install.ps1 | iex
 
 安装脚本会：
 
-- 从 GitHub Releases 下载预编译的 Rust 二进制
-- 安装 `scodex` 作为主命令
-- 保留 `auto-codex` 作为兼容入口
-- 安装 `scodex-original` 作为到底层 `codex` 的透传辅助命令
-- 在存在 `~/.codex/auth.json` 时导入到本地状态
-- 在额度接口可用时刷新使用量缓存
+- 下载最新发布的 `sclaude` 二进制
+- 安装 `sclaude` 作为主命令
+- 安装 `opus`、`sonnet`、`haiku` 作为模型入口
+- 安装 `sclaude-original` 作为到底层 `claude` 的透传辅助命令
+- 当检测到 `~/.claude.json`、`~/.config.json`、`~/.claude/.claude.json` 或 `~/.claude/.config.json` 时，自动导入当前 Claude 配置
 
 ## 依赖
 
 - Unix 安装器：`bash`、`curl`、`tar`
 - Windows 安装器：PowerShell 5+ 或 PowerShell 7+
-- `codex` 仍然是 `launch`、`login` 和透传命令的运行时依赖
-- 当缺少 `codex` 时，`scodex` 会提示是否执行官方安装命令 `npm install -g @openai/codex`
-- `deploy` 还依赖 `ssh` 和 `scp`
-- `push` 和 `pull` 还依赖 `git` 以及 `SCODEX_POOL_KEY`
+- `claude` 仍然是 `launch`、`login` 和透传命令的运行时依赖
+- 如果本机缺少 `claude`，`sclaude` 会提供通过 `npm` 安装 `@anthropic-ai/claude-code` 的选项
+- `push` 和 `pull` 额外依赖 `git` 与 `SCLAUDE_POOL_KEY`
 
 源码构建：
 
@@ -54,234 +52,219 @@ cargo build --release
 
 ## 入口命令
 
-- `scodex`：主命令
-- `auto-codex`：历史兼容 wrapper
-- `scodex-original`：到底层官方 Codex CLI 的透传辅助命令
-- `codex`：官方 Codex CLI 命令，安装器不会接管
+- `sclaude`：主命令
+- `opus`：固定追加 `--model opus`
+- `sonnet`：固定追加 `--model sonnet`
+- `haiku`：固定追加 `--model haiku`
+- `sclaude-original`：到底层 `claude` 的透传辅助命令
+
+所有运行时入口都会以这些方式启动 Claude：
+
+- 把 `CLAUDE_CONFIG_DIR` 指向选中的受管账号目录
+- 设置 `IS_SANDBOX=1`
+- 如果你没自己传，则自动补 `--dangerously-skip-permissions`
 
 ## 命令总览
 
-默认使用 `scodex`。保留 `auto-codex` 只是为了兼容旧习惯，不再作为文档主名。
-
 | 命令 | 作用 |
 | --- | --- |
-| `scodex` | 刷新额度；如果当前账号的 5h 剩余额度至少还有 20% 就继续使用它，否则切换到最佳账号，然后启动或恢复 Codex |
-| `scodex launch` | 默认行为的显式写法 |
-| `scodex auto` | 刷新额度；如果当前账号的 5h 剩余额度至少还有 20% 就继续使用它，否则切换到最佳账号，但不启动 Codex |
-| `scodex add` | 尽量自动打开 OpenAI 注册页，然后通过设备登录添加一个账号 |
-| `scodex login` | 通过 `codex login --device-auth` 添加一个账号 |
-| `scodex deploy <target>` | 把当前 `~/.codex/auth.json` 复制到远端机器和路径（`sync` 为别名） |
-| `scodex push <repo>` | 把本地账号池推送到 Git 仓库的指定子目录 |
-| `scodex pull <repo>` | 从 Git 仓库的指定子目录拉取账号池并导入到本地状态目录 |
-| `scodex use <email>` | 按邮箱直接切换到一个已知账号 |
-| `scodex rm <email>` | 按邮箱删除一个已保存的账号（默认会交互式二次确认，可加 `-y` 跳过） |
-| `scodex list` | 先刷新实时额度，再显示最新账号额度 |
-| `scodex refresh` | 刷新所有已知账号的实时额度，并直接打印最新结果 |
-| `scodex import-auth <path>` | 导入一个 `auth.json` 文件，或包含 `auth.json` 的目录 |
-| `scodex import-known` | 导入 `~/.codex/auth.json`；可选导入 AI Accounts Hub 管理的账号 |
-| `scodex update` | 从 GitHub Releases 下载当前平台匹配的 Rust 发行资产并替换已安装二进制（`upgrade` 为兼容别名） |
+| `sclaude` | 默认行为，等价于 `sclaude launch` |
+| `sclaude launch` | 选择最佳账号，切换后启动或恢复 Claude |
+| `sclaude auto` | 只选择最佳账号，不启动 Claude |
+| `sclaude login` | 通过官方 OAuth 或 API 凭据添加一个账号，并立即切换过去 |
+| `sclaude add` | 用和 `login` 相同的流程添加账号；只有传了 `--switch` 才会切换 |
+| `sclaude push <repo>` | 把完整本地账号池加密后推送到 Git 仓库 |
+| `sclaude pull <repo>` | 从 Git 仓库拉取并解密账号池，然后覆盖本地状态 |
+| `sclaude use <label>` | 按 `list` 中显示的账号标识直接切换 |
+| `sclaude rm <label>` | 按 `list` 中显示的账号标识删除一个账号 |
+| `sclaude list` | 刷新当前账号状态后渲染账号表格 |
+| `sclaude refresh` | 刷新所有已知账号并打印最新表格 |
+| `sclaude import-auth <path>` | 导入 Claude 认证文件或 Claude 配置目录 |
+| `sclaude import-known` | 导入默认已知的本地 Claude 配置 |
+| `sclaude update` | 从 GitHub Releases 自更新 `sclaude`；`upgrade` 是别名 |
 
-## 支持的参数
+## 登录模式
 
-### 全局参数
-
-- `--state-dir <path>`：覆盖本地状态目录
-- `-h`、`--help`：显示帮助
-
-### `launch`
+### OAuth
 
 ```bash
-scodex launch [--no-import-known] [--no-login] [--dry-run] [--no-resume] [--no-launch] [<codex 参数...>]
+sclaude login
+sclaude login --oauth
+sclaude login --oauth --username you@example.com
 ```
 
-- `--no-import-known`：跳过自动导入 `~/.codex/auth.json`
-- `--no-login`：当没有可用账号时，不自动发起设备登录
-- `--dry-run`：只打印会选哪个账号，不执行切换和启动
-- `--no-resume`：总是新开会话，不执行 `resume --last`
-- `--no-launch`：只切换账号，不启动 Codex
-- 命令后面的额外参数会继续传给 Codex
-- 刷新后，如果当前账号的 5h 剩余额度仍然不少于 20%，`launch` 会直接继续使用它，不再重新对所有账号打分选号
+实际行为：
 
-### `auto`
+- 在临时受管目录里执行 `claude auth login --claudeai`
+- `--username` 只作为传给 Claude 的邮箱提示
+- `--password` 仅为兼容保留，当前不会被使用
+- 登录成功后，`sclaude login` 总是会切换到新导入的账号
+
+### API
 
 ```bash
-scodex auto [--no-import-known] [--no-login] [--dry-run]
+sclaude login --api \
+  --provider poe.com \
+  --ANTHROPIC_BASE_URL https://example.com/api/claude \
+  --ANTHROPIC_API_KEY sk-ant-xxxx
 ```
 
-- 会刷新额度；如果当前账号的 5h 剩余额度至少还有 20% 就继续使用它，否则切换到最佳账号
-- 不会启动 Codex
+实际行为：
 
-### `login`
-
-```bash
-scodex login [--oauth --username <EMAIL> --password <PASS>]
-```
-
-- 登录完成后会直接切换到新账号
-- `--oauth`：使用浏览器 OAuth 流程，并在受控 Chrome 窗口中自动填充提供的凭据
-- `--username <EMAIL>` / `--password <PASS>`：开启 `--oauth` 时必须同时提供
+- 会生成一个最小化的受管 Claude 配置，里面包含 `ANTHROPIC_BASE_URL`、`ANTHROPIC_API_KEY` 和 `providerId`
+- 账号展示名会显示成 `key-<前缀>@<provider>`
+- 会按 `(ANTHROPIC_BASE_URL, ANTHROPIC_API_KEY)` 的实际指纹去重，所以同一组 API 账号重复导入时会更新原记录，而不是新增重复项
+- 不同 provider，或者不同的 base URL / key 组合，可以并存
 
 ### `add`
 
 ```bash
-scodex add [--switch]
+sclaude add [--switch]
+sclaude add --api --provider poe.com --ANTHROPIC_BASE_URL ... --ANTHROPIC_API_KEY ...
 ```
 
-- 会尽量在默认浏览器中打开 `https://auth.openai.com/create-account`
-- 如果当前环境没有可用图形界面，就会打印注册链接并进入引导模式
-- 注册或登录完成后，会继续执行 `codex login --device-auth`
-- `--switch`：注册/登录完成后立即切换到新账号
+实际行为：
+
+- 使用和 `sclaude login` 完全相同的登录参数与流程
+- 与 `login` 的区别只在于：`add` 只有在传入 `--switch` 时才会切换到新账号
+
+## 命令细节
+
+### `launch`
+
+```bash
+sclaude launch [--no-import-known] [--no-login] [--dry-run] [--no-resume] [--no-launch] [<claude 参数...>]
+```
+
+- 除非传了 `--no-import-known`，否则会先尝试导入本机已知 Claude 配置
+- 会刷新状态，并尽量继续使用当前仍然可用的账号
+- 如果没有可用账号，且没传 `--no-login`，会回退到 OAuth 登录流程
+- `--dry-run` 只显示会选中的账号，不执行切换和启动
+- `--no-launch` 只切换账号，不启动 Claude
+- 其余参数会继续透传给 Claude
+
+### `auto`
+
+```bash
+sclaude auto [--no-import-known] [--no-login] [--dry-run]
+```
+
+- 和 `launch` 使用同一套选号逻辑
+- 不会启动 Claude
 
 ### `use`
 
 ```bash
-scodex use <email>
+sclaude use <label>
 ```
 
-- 会按邮箱大小写不敏感精确匹配已知账号，并直接切换过去
-- 示例：`scodex use lauzhihao@qq.com`
+- 按 `sclaude list` 中显示的账号标识匹配
+- 匹配大小写不敏感
 
 ### `rm`
 
 ```bash
-scodex rm [-y] <email>
+sclaude rm [-y|--yes] <label>
 ```
 
-- 按邮箱大小写不敏感匹配账号，从本地状态里移除
-- 同时清除该账号在状态目录下的 auth 家目录与 usage 缓存
-- 默认会弹出 `Y/N` 二次确认；加 `-y`（`--yes`）可跳过
-- 不加 `-y` 时需要交互式终端；stdin/stdout 非 TTY 时会拒绝执行
-
-### `deploy`
-
-```bash
-scodex deploy [-i <identity_file>] <user@host:/target_path>
-scodex sync [-i <identity_file>] <user@host:/target_path>
-```
-
-- 会把当前正在使用的 `~/.codex/auth.json` 复制到远端机器
-- `deploy` 是主命令名；`sync` 是兼容别名，更适合“多台机器同步”的使用习惯
-- 如果 `<target_path>` 以 `auth.json` 结尾，就按远端完整文件路径处理
-- 否则会把 `<target_path>` 当成远端目录，并在其下写入 `auth.json`
-- `-i <identity_file>`：把 SSH 身份文件同时传给 `ssh` 和 `scp`
-- 命令会先准备远端目录，再复制凭证文件
-- 鉴权仍然沿用你自己的 SSH 配置；如果 `ssh` 或 `scp` 提示输入密码，就由你自己输入
-
-### `push`
-
-```bash
-export SCODEX_POOL_KEY='替换成一段足够长的随机 secret'
-scodex push [-i <identity_file>] [--path <repo_path>] <repo>
-```
-
-- 会用你现有的 Git 凭据克隆 `<repo>`
-- 需要先在环境变量里设置 `SCODEX_POOL_KEY`，并基于它派生对称加密密钥
-- 默认把本地账号池导出到 `.scodex-account-pool/bundle.enc.json`
-- 仓库里只保存加密后的 bundle，不会明文提交账号 `auth.json`
-- 始终以当前本地快照为准全量覆盖远端，不会 merge 远端旧账号池
-- 只有导出的账号池真的发生变化时，才会提交并推送
-- `--path <repo_path>`：改用仓库内的其他子目录；必须是相对路径，且不能包含 `..`
-- `-i <identity_file>`：通过 `GIT_SSH_COMMAND` 把 SSH 私钥传给 git，用于 SSH 协议的仓库
-- 如果缺少 `git`，`scodex` 只会给出安装提示，不会强制替你安装
-- 如果私有仓库访问失败，`scodex` 会明确提示你检查仓库 URL，以及 Git 凭据、SSH key 或 PAT
-
-### `pull`
-
-```bash
-export SCODEX_POOL_KEY='替换成和 push 时相同的 secret'
-scodex pull [-i <identity_file>] [--path <repo_path>] <repo>
-```
-
-- 会用你现有的 Git 凭据克隆 `<repo>`
-- 需要使用和 `push` 时完全相同的 `SCODEX_POOL_KEY`
-- 默认从 `.scodex-account-pool/bundle.enc.json` 读取加密后的账号池
-- 会直接用远端快照覆盖本地账号池，不做 merge
-- 写入前会清空旧的本地账号目录，并重置本地 usage cache
-- 导入完成后会立即刷新实时额度，并打印最新账号列表
-- 如果密钥不对，会直接报解密失败，不会导入半套数据
-- `--path <repo_path>`：改用仓库内的其他子目录；必须是相对路径，且不能包含 `..`
-- `-i <identity_file>`：通过 `GIT_SSH_COMMAND` 把 SSH 私钥传给 git，用于 SSH 协议的仓库
+- 从本地状态里删除账号，并清理其受管配置目录
+- 默认会要求交互式确认；传 `-y` 则跳过确认
 
 ### `list`
 
 ```bash
-scodex list
+sclaude list
 ```
 
-- 会先调用实时额度接口，再打印最新的账号额度快照
+- 会先刷新所有已知账号
+- 然后输出包含账号标识、plan、额度、重置时间和状态的表格
 
 ### `refresh`
 
 ```bash
-scodex refresh
+sclaude refresh
 ```
 
-- 会对所有已知账号调用实时额度接口
-- 刷新完成后会立刻打印最新账号列表
-- 当前 Rust 发行版会并行刷新账号额度
+- 刷新所有已知账号
+- 打印刷新数量和最新账号表格
 
 ### `import-auth`
 
 ```bash
-scodex import-auth <path>
+sclaude import-auth <path>
 ```
 
-- `<path>` 可以是 `auth.json` 文件，也可以是其父目录
+- `<path>` 可以是 Claude 认证文件，也可以是包含认证文件的目录
+- 导入后会复制到 `sclaude` 自己的受管状态目录里
 
 ### `import-known`
 
 ```bash
-scodex import-known
+sclaude import-known
 ```
 
-- 默认导入 `~/.codex/auth.json`
-- 如果还想导入 AI Accounts Hub 管理的 Codex homes，可以这样执行：
+- 如果设置了 `CLAUDE_CONFIG_DIR`，会直接导入该 live profile
+- 否则会从这些默认位置导入本机 Claude 配置：
+  - `~/.claude.json`
+  - `~/.config.json`
+  - `~/.claude/`
+- 如果 `claude auth status` 可用，会优先用它识别身份；失败时再回退到本地认证文件解析
+
+### `push`
 
 ```bash
-AUTO_CODEX_IMPORT_ACCOUNTS_HUB=1 scodex import-known
+export SCLAUDE_POOL_KEY='替换成足够长的随机 secret'
+sclaude push [-i <identity_file>] [--path <repo_path>] <repo>
 ```
+
+- 使用你现有的 Git 凭据克隆仓库
+- 把完整本地账号池导出成加密 bundle
+- 默认写到 `.sclaude-account-pool/bundle.enc.json`
+- 只有加密后的 bundle 发生变化时才会提交并推送
+- `--path <repo_path>` 必须是仓库内相对路径
+- `-i <identity_file>` 会通过 `GIT_SSH_COMMAND` 把 SSH 私钥传给 Git
+
+### `pull`
+
+```bash
+export SCLAUDE_POOL_KEY='替换成和 push 相同的 secret'
+sclaude pull [-i <identity_file>] [--path <repo_path>] <repo>
+```
+
+- 使用你现有的 Git 凭据克隆仓库
+- 解密远端账号池 bundle
+- 直接覆盖本地受管账号池，不做 merge
+- 导入后会立刻刷新账号状态，并打印最新表格
 
 ### `update`
 
 ```bash
-scodex update [-f|--force]
-scodex upgrade [-f|--force]
+sclaude update [-f|--force]
+sclaude upgrade [-f|--force]
 ```
 
-- 会从 GitHub Releases 下载当前平台匹配的最新发行资产并替换已安装二进制
-- `update` 仍然是主命令，用来兼容更早期的 scodex 版本用户
-- `upgrade` 是等价别名，给更偏好这个命名的用户使用
-- `-f`、`--force`：即使当前版本已经等于最新 tag，也强制重新安装一次
+- 从 `lauzhihao/sclaude` 的 GitHub Releases 下载当前平台对应资产
+- 替换当前 `sclaude` 主二进制
+- 同时更新 `opus`、`sonnet`、`haiku` 这些 sidecar binary
+- `-f`、`--force` 会在当前版本已经是最新时仍然强制重装
 
 ## 透传行为
 
-如果第一个非全局参数不是文档里列出的子命令，`scodex` 会在完成账号选择后，把它当成官方 Codex CLI 命令继续执行。
+如果第一个非全局参数不是 `sclaude` 自己声明的子命令，`sclaude` 会在完成账号选择后，把它当成 Claude CLI 子命令继续执行。
 
 例如：
 
 ```bash
-scodex resume --last
-scodex exec "fix failing test"
+sclaude auth status
+sclaude mcp list
+opus auth status
 ```
 
-这也是为什么 `scodex resume --last` 可以工作，尽管 `resume` 并不是 `scodex` 自己声明的子命令。
+这也是为什么 `opus auth status` 可以直接工作，尽管 `auth` 不是 `sclaude` 自己声明的子命令。
 
-## 选号说明
+## 账号存储说明
 
-- 刷新额度时会调用实时 usage API，不只是读本地缓存
-- 选号时优先看 `5h` 窗口剩余额度，再看 weekly 额度
-- 目标是优先挑出“下一次会话最可能立刻可用”的账号
-
-## 发布检查清单
-
-推送前：
-
-1. 执行 `rg -n 'access_token|refresh_token|id_token|OPENAI_API_KEY|account_id|@qq\\.com|/Users/ncds|/Users/liuzhihao' .`
-2. 确认 `git status --short` 里只有代码和文档改动
-3. 在推送前检查 `git diff --cached`
-
-## 发布说明
-
-- CI 现在只维护 Rust 实现。
-- `v*` 标签会通过 GitHub Actions 发布预编译二进制。
-- 历史 Python 实现已经从这个仓库中移除。
+- 受管账号保存在 `sclaude` 的本地状态目录下
+- 每个账号都会被保存成隔离的 Claude 配置目录
+- macOS 上会优先把 credential bundle 存进 Keychain
+- 其他平台上会回退到受管账号目录里的本地 bundle 文件

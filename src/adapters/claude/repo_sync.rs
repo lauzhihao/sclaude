@@ -154,7 +154,13 @@ struct RepoBundle {
 struct RepoBundleAccount {
     id: String,
     email: String,
+    #[serde(default)]
+    account_kind: Option<String>,
+    #[serde(default)]
+    provider_id: Option<String>,
     account_id: Option<String>,
+    #[serde(default)]
+    identity_fingerprint: Option<String>,
     plan: Option<String>,
     #[serde(default)]
     credential_bundle_key: Option<String>,
@@ -206,7 +212,10 @@ fn export_account_bundle(account: &AccountRecord) -> Result<RepoBundleAccount> {
     Ok(RepoBundleAccount {
         id: account.id.clone(),
         email: account.email.clone(),
+        account_kind: account.account_kind.clone(),
+        provider_id: account.provider_id.clone(),
         account_id: account.account_id.clone(),
+        identity_fingerprint: account.identity_fingerprint.clone(),
         plan: account.plan.clone(),
         credential_bundle_key: Some(bundle_key),
         credential_bundle_b64: credential_bundle
@@ -384,7 +393,10 @@ fn overwrite_local_account_pool(state_dir: &Path, bundle: &RepoBundle) -> Result
         state.accounts.push(AccountRecord {
             id: account.id.clone(),
             email: account.email.clone(),
+            account_kind: account.account_kind.clone(),
+            provider_id: account.provider_id.clone(),
             account_id: account.account_id.clone(),
+            identity_fingerprint: account.identity_fingerprint.clone(),
             plan: account.plan.clone(),
             auth_path: auth_path.to_string_lossy().into_owned(),
             config_path: Some(staged_home.to_string_lossy().into_owned()),
@@ -652,7 +664,10 @@ mod tests {
             accounts: vec![RepoBundleAccount {
                 id: "acct-1".into(),
                 email: "a@example.com".into(),
+                account_kind: Some("oauth".into()),
+                provider_id: None,
                 account_id: Some("org-1".into()),
+                identity_fingerprint: Some("oauth:org-1".into()),
                 plan: Some("pro".into()),
                 credential_bundle_key: None,
                 credential_bundle_b64: None,

@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use reqwest::Url;
 use serde::Deserialize;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 use super::ClaudeAdapter;
 use super::paths::{find_claude_auth_file, find_claude_bin};
@@ -94,22 +95,28 @@ pub(super) fn decode_identity(auth: &Value) -> Result<LiveIdentityWithPlan> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
-
     let display = identity_display_name(auth);
+    let account_kind = infer_account_kind(auth);
+    let provider_id = provider_id(auth);
+    let identity_fingerprint = identity_fingerprint(auth, account_id.as_deref());
 
     Ok(LiveIdentityWithPlan {
         email: display,
+        account_kind,
+        provider_id,
         account_id,
+        identity_fingerprint,
         plan: None,
     })
 }
 
 fn identity_display_name(auth: &Value) -> String {
-    let host = auth
-        .get("ANTHROPIC_BASE_URL")
-        .and_then(Value::as_str)
-        .and_then(parse_host)
-        .unwrap_or_else(|| "claude".into());
+    let provider = provider_id(auth).unwrap_or_else(|| {
+        auth.get("ANTHROPIC_BASE_URL")
+            .and_then(Value::as_str)
+            .and_then(parse_host)
+            .unwrap_or_else(|| "claude".into())
+    });
 
     if let Some(user_id) = auth
         .get("userID")
@@ -117,7 +124,7 @@ fn identity_display_name(auth: &Value) -> String {
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        return format!("user-{}@{host}", short_token(user_id));
+        return format!("user-{}@{provider}", short_token(user_id));
     }
 
     if let Some(api_key) = auth
@@ -126,10 +133,63 @@ fn identity_display_name(auth: &Value) -> String {
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        return format!("key-{}@{host}", short_token(api_key));
+        return api_display_name(api_key, &provider);
     }
 
-    format!("account@{host}")
+    format!("account@{provider}")
+}
+
+fn infer_account_kind(auth: &Value) -> Option<String> {
+    if auth
+        .get("ANTHROPIC_API_KEY")
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.trim().is_empty())
+    {
+        Some("api".into())
+    } else if auth
+        .get("userID")
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.trim().is_empty())
+    {
+        Some("oauth".into())
+    } else {
+        None
+    }
+}
+
+fn provider_id(auth: &Value) -> Option<String> {
+    auth.get("providerId")
+        .and_then(Value::as_str)
+        .or_else(|| auth.get("ANTHROPIC_PROVIDER_ID").and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            auth.get("ANTHROPIC_BASE_URL")
+                .and_then(Value::as_str)
+                .and_then(parse_host)
+        })
+}
+
+fn identity_fingerprint(auth: &Value, account_id: Option<&str>) -> Option<String> {
+    if let Some(api_key) = auth
+        .get("ANTHROPIC_API_KEY")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let base_url = auth
+            .get("ANTHROPIC_BASE_URL")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default();
+        return Some(api_identity_fingerprint(base_url, api_key));
+    }
+
+    Some(oauth_identity_fingerprint(
+        account_id,
+        auth.get("email").and_then(Value::as_str),
+    ))
 }
 
 fn parse_host(raw: &str) -> Option<String> {
@@ -146,7 +206,10 @@ fn short_token(raw: &str) -> String {
 #[derive(Debug)]
 pub(super) struct LiveIdentityWithPlan {
     pub(super) email: String,
+    pub(super) account_kind: Option<String>,
+    pub(super) provider_id: Option<String>,
     pub(super) account_id: Option<String>,
+    pub(super) identity_fingerprint: Option<String>,
     pub(super) plan: Option<String>,
 }
 
@@ -159,10 +222,20 @@ pub(super) struct AuthStatus {
 
 impl AuthStatus {
     pub(super) fn into_identity(self) -> LiveIdentityWithPlan {
+        let AuthStatus {
+            email,
+            org_id,
+            subscription_type,
+        } = self;
+        let identity_fingerprint = oauth_identity_fingerprint(org_id.as_deref(), Some(&email));
+
         LiveIdentityWithPlan {
-            email: self.email,
-            account_id: self.org_id,
-            plan: self.subscription_type,
+            email,
+            account_kind: Some("oauth".into()),
+            provider_id: None,
+            account_id: org_id,
+            identity_fingerprint: Some(identity_fingerprint),
+            plan: subscription_type,
         }
     }
 }
@@ -185,6 +258,51 @@ impl From<LiveIdentityWithPlan> for LiveIdentity {
             account_id: value.account_id,
         }
     }
+}
+
+pub(super) fn api_display_name(api_key: &str, provider_id: &str) -> String {
+    format!(
+        "key-{}@{}",
+        short_token(api_key.trim()),
+        provider_id.trim().to_ascii_lowercase()
+    )
+}
+
+pub(super) fn normalize_api_provider_id(value: &str) -> Result<String> {
+    let normalized = value.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        anyhow::bail!("provider id cannot be empty");
+    }
+    Ok(normalized)
+}
+
+pub(super) fn normalize_api_base_url(value: &str) -> Result<String> {
+    let trimmed = value.trim();
+    let parsed = Url::parse(trimmed).context("invalid ANTHROPIC_BASE_URL")?;
+    Ok(parsed.to_string().trim_end_matches('/').to_string())
+}
+
+pub(super) fn api_identity_fingerprint(base_url: &str, api_key: &str) -> String {
+    let normalized_base = base_url.trim().trim_end_matches('/');
+    let normalized_key = api_key.trim();
+    let mut hasher = Sha256::new();
+    hasher.update(normalized_base.as_bytes());
+    hasher.update(b"\n");
+    hasher.update(normalized_key.as_bytes());
+    format!("api:{:x}", hasher.finalize())
+}
+
+pub(super) fn oauth_identity_fingerprint(account_id: Option<&str>, email: Option<&str>) -> String {
+    if let Some(account_id) = account_id.map(str::trim).filter(|value| !value.is_empty()) {
+        return format!("oauth:{account_id}");
+    }
+
+    let normalized_email = email
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("unknown@claude")
+        .to_ascii_lowercase();
+    format!("oauth:{normalized_email}")
 }
 
 #[cfg(test)]

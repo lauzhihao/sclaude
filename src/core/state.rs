@@ -12,7 +12,13 @@ pub struct AccountRecord {
     #[serde(default)]
     pub email: String,
     #[serde(default)]
+    pub account_kind: Option<String>,
+    #[serde(default)]
+    pub provider_id: Option<String>,
+    #[serde(default)]
     pub account_id: Option<String>,
+    #[serde(default)]
+    pub identity_fingerprint: Option<String>,
     #[serde(default)]
     pub plan: Option<String>,
     #[serde(default)]

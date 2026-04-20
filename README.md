@@ -1,28 +1,28 @@
-# scodex
+# sclaude
 
 [English](./README.md) | [简体中文](./README.zh-CN.md)
 
-`scodex` selects the Codex account with the best immediately usable quota, switches `~/.codex/auth.json`, and then launches or resumes Codex.
+`sclaude` is a Rust wrapper around Claude Code CLI for multi-account management, account import, encrypted account-pool sync, and model-pinned entrypoints.
 
-The repository is intentionally code-only. It does not contain account pool data, cached usage, local config, or virtualenv files.
+The repository is intentionally code-only. It does not contain account pool data, cached usage, local credentials, or machine-specific config.
 
-This repository is now Rust-only. `scodex` is the maintained implementation and the only supported runtime in the source tree.
-
-If you do not like or are not used to the command line, try the more feature-rich GUI version: <https://github.com/murongg/ai-accounts-hub>
+If you want a GUI for manual account management, see <https://github.com/murongg/ai-accounts-hub>.
 
 ## Install
 
+Unix:
+
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lauzhihao/scodex/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lauzhihao/sclaude/main/install.sh | bash
 ```
 
 Windows PowerShell:
 
 ```powershell
-irm https://raw.githubusercontent.com/lauzhihao/scodex/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/lauzhihao/sclaude/main/install.ps1 | iex
 ```
 
-Current prebuilt release targets:
+Current published release targets:
 
 - Linux: `x86_64-unknown-linux-musl`
 - macOS: `x86_64-apple-darwin`, `aarch64-apple-darwin`
@@ -30,21 +30,19 @@ Current prebuilt release targets:
 
 The installer:
 
-- downloads a prebuilt Rust release binary from GitHub Releases
-- installs `scodex` as the primary command
-- keeps `auto-codex` as a compatibility command
-- installs `scodex-original` as a thin passthrough helper to the underlying `codex`
-- imports `~/.codex/auth.json` into local state when it exists
-- refreshes usage cache after import when the usage API is reachable
+- downloads the latest published `sclaude` release asset
+- installs `sclaude` as the primary command
+- installs `opus`, `sonnet`, and `haiku` as model entrypoints
+- installs `sclaude-original` as a thin passthrough helper to the underlying `claude`
+- imports the current Claude profile when it finds `~/.claude.json`, `~/.config.json`, `~/.claude/.claude.json`, or `~/.claude/.config.json`
 
 ## Requirements
 
 - Unix installer: `bash`, `curl`, `tar`
 - Windows installer: PowerShell 5+ or PowerShell 7+
-- `codex` is still required at runtime for `launch`, `login`, and passthrough commands
-- when `codex` is missing, `scodex` prompts to install the official CLI with `npm install -g @openai/codex`
-- `deploy` additionally requires `ssh` and `scp`
-- `push` and `pull` additionally require `git` plus `SCODEX_POOL_KEY`
+- `claude` is still required at runtime for `launch`, `login`, and passthrough commands
+- if `claude` is missing, `sclaude` offers to install `@anthropic-ai/claude-code` through `npm`
+- `push` and `pull` additionally require `git` plus `SCLAUDE_POOL_KEY`
 
 Build from source:
 
@@ -54,234 +52,219 @@ cargo build --release
 
 ## Entrypoints
 
-- `scodex`: primary command
-- `auto-codex`: legacy compatibility wrapper
-- `scodex-original`: passthrough helper to the underlying Codex CLI binary
-- `codex`: the official Codex CLI command, left unchanged
+- `sclaude`: primary command
+- `opus`: forces `--model opus`
+- `sonnet`: forces `--model sonnet`
+- `haiku`: forces `--model haiku`
+- `sclaude-original`: passthrough helper to the underlying `claude`
+
+All runtime entrypoints launch Claude with:
+
+- `CLAUDE_CONFIG_DIR` pointing at the selected managed profile
+- `IS_SANDBOX=1`
+- `--dangerously-skip-permissions` unless you already passed it
 
 ## Command Overview
 
-Use `scodex` as the default command. The legacy `auto-codex` wrapper is kept only for backward compatibility.
-
 | Command | Purpose |
 | --- | --- |
-| `scodex` | Refresh usage, keep the current account when its 5h quota is at least 20%, otherwise switch to the best account, then launch or resume Codex |
-| `scodex launch` | Explicit form of the default behavior |
-| `scodex auto` | Refresh usage, keep the current account when its 5h quota is at least 20%, otherwise switch to the best account, without launching Codex |
-| `scodex add` | Open the OpenAI signup page when possible, then add one account through device auth |
-| `scodex login` | Add one account via `codex login --device-auth` |
-| `scodex deploy <target>` | Copy the current `~/.codex/auth.json` to a remote machine and path (`sync` is an alias) |
-| `scodex push <repo>` | Push the local account pool into a Git repository subdirectory |
-| `scodex pull <repo>` | Pull an account pool from a Git repository subdirectory into the local state directory |
-| `scodex use <email>` | Switch directly to a known account by email |
-| `scodex rm <email>` | Remove a stored account by email (interactive confirm, `-y` to skip) |
-| `scodex list` | Refresh live usage, then show the latest account quotas |
-| `scodex refresh` | Refresh live usage for all known accounts and print the latest results |
-| `scodex import-auth <path>` | Import an `auth.json` file or a home directory containing `auth.json` |
-| `scodex import-known` | Import `~/.codex/auth.json`; optionally import AI Accounts Hub managed homes |
-| `scodex update` | Download the latest matching Rust release asset from GitHub Releases and replace the installed binary (`upgrade` is an alias) |
+| `sclaude` | Default behavior; same as `sclaude launch` |
+| `sclaude launch` | Pick the best account, switch to it, then launch or resume Claude |
+| `sclaude auto` | Pick the best account without launching Claude |
+| `sclaude login` | Add one account through official OAuth or API credentials, then switch to it |
+| `sclaude add` | Add one account through the same login flow as `login`; switch only when `--switch` is passed |
+| `sclaude push <repo>` | Encrypt and push the full local account pool into a Git repository |
+| `sclaude pull <repo>` | Pull and decrypt an account pool from a Git repository, then overwrite local state |
+| `sclaude use <label>` | Switch directly to a known account by the label shown in `list` |
+| `sclaude rm <label>` | Remove a stored account by the label shown in `list` |
+| `sclaude list` | Refresh current usage state, then render the account table |
+| `sclaude refresh` | Refresh all known accounts and print the latest table |
+| `sclaude import-auth <path>` | Import a Claude auth file or a Claude profile directory |
+| `sclaude import-known` | Import the default known local Claude profile |
+| `sclaude update` | Self-update `sclaude` from GitHub Releases; `upgrade` is an alias |
 
-## Supported Options
+## Login Modes
 
-### Global Options
-
-- `--state-dir <path>`: override the local state directory
-- `-h`, `--help`: show help
-
-### `launch`
+### OAuth
 
 ```bash
-scodex launch [--no-import-known] [--no-login] [--dry-run] [--no-resume] [--no-launch] [<codex args...>]
+sclaude login
+sclaude login --oauth
+sclaude login --oauth --username you@example.com
 ```
 
-- `--no-import-known`: skip auto-import of `~/.codex/auth.json`
-- `--no-login`: do not start device auth when no usable account exists
-- `--dry-run`: print which account would be selected without switching or launching
-- `--no-resume`: always start a fresh Codex session instead of `resume --last`
-- `--no-launch`: switch the account but do not start Codex
-- extra args after the command are forwarded to Codex
-- after refresh, if the current account still has at least 20% remaining in the 5h window, `launch` keeps using it instead of re-scoring all accounts
+Actual behavior:
 
-### `auto`
+- runs `claude auth login --claudeai` in a temporary managed profile
+- `--username` is only an email hint passed to Claude
+- `--password` is kept only for compatibility and is currently ignored
+- after a successful login, `sclaude login` always switches to the imported account
+
+### API
 
 ```bash
-scodex auto [--no-import-known] [--no-login] [--dry-run]
+sclaude login --api \
+  --provider poe.com \
+  --ANTHROPIC_BASE_URL https://example.com/api/claude \
+  --ANTHROPIC_API_KEY sk-ant-xxxx
 ```
 
-- refreshes usage and keeps the current account when its 5h quota is at least 20%; otherwise it switches to the best account
-- does not start Codex
+Actual behavior:
 
-### `login`
-
-```bash
-scodex login [--oauth --username <EMAIL> --password <PASS>]
-```
-
-- login always switches to the newly added account
-- `--oauth`: use the browser OAuth flow and auto-fill the provided credentials in a controlled Chrome window
-- `--username <EMAIL>` / `--password <PASS>`: required together with `--oauth`
+- stores a minimal managed Claude profile containing `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY`, and `providerId`
+- displays the account as `key-<prefix>@<provider>`
+- deduplicates by the effective `(ANTHROPIC_BASE_URL, ANTHROPIC_API_KEY)` fingerprint, so repeated imports of the same API account update the existing record instead of creating a duplicate
+- multiple different providers or different key/base-url pairs can coexist
 
 ### `add`
 
 ```bash
-scodex add [--switch]
+sclaude add [--switch]
+sclaude add --api --provider poe.com --ANTHROPIC_BASE_URL ... --ANTHROPIC_API_KEY ...
 ```
 
-- tries to open `https://auth.openai.com/create-account` in the default browser
-- if no GUI is available, prints the signup URL and continues in guided mode
-- after signup or login, continues with `codex login --device-auth`
-- `--switch`: switch to the newly added account after signup/login
+Actual behavior:
+
+- uses the same login flow and options as `sclaude login`
+- unlike `login`, it switches to the new account only when `--switch` is passed
+
+## Command Details
+
+### `launch`
+
+```bash
+sclaude launch [--no-import-known] [--no-login] [--dry-run] [--no-resume] [--no-launch] [<claude args...>]
+```
+
+- imports known local profiles first unless `--no-import-known` is passed
+- refreshes state and keeps the current account when it still looks usable
+- if `--no-login` is not passed and no account exists, it falls back to the OAuth login flow
+- `--dry-run` prints the chosen account without switching or launching
+- `--no-launch` switches the account without starting Claude
+- extra arguments are forwarded to Claude
+
+### `auto`
+
+```bash
+sclaude auto [--no-import-known] [--no-login] [--dry-run]
+```
+
+- same account-selection logic as `launch`
+- never starts Claude
 
 ### `use`
 
 ```bash
-scodex use <email>
+sclaude use <label>
 ```
 
-- switches directly to the known account whose email matches `<email>` case-insensitively
-- example: `scodex use lauzhihao@qq.com`
+- matches the account label shown in `sclaude list`
+- matching is case-insensitive
 
 ### `rm`
 
 ```bash
-scodex rm [-y] <email>
+sclaude rm [-y|--yes] <label>
 ```
 
-- removes the account whose email matches `<email>` case-insensitively from the local state
-- deletes the account's stored auth home under the state directory and clears its usage cache
-- prompts for a `Y/N` confirmation before deleting; `-y` (`--yes`) skips the prompt
-- without `-y`, requires an interactive terminal; refuses to run when stdin/stdout are non-TTY
-
-### `deploy`
-
-```bash
-scodex deploy [-i <identity_file>] <user@host:/target_path>
-scodex sync [-i <identity_file>] <user@host:/target_path>
-```
-
-- copies the current live `~/.codex/auth.json` to the remote machine
-- `deploy` is the primary name; `sync` is a compatible alias for users who think in multi-machine sync flows
-- if `<target_path>` ends with `auth.json`, it is treated as the exact remote file path
-- otherwise `<target_path>` is treated as a remote directory and `auth.json` is written under it
-- `-i <identity_file>`: pass an SSH identity file to both `ssh` and `scp`
-- the command prepares the remote directory and then copies the credential file
-- authentication is left to your existing SSH setup; if `ssh` or `scp` asks for a password, enter it yourself
-
-### `push`
-
-```bash
-export SCODEX_POOL_KEY='replace-with-a-long-random-secret'
-scodex push [-i <identity_file>] [--path <repo_path>] <repo>
-```
-
-- clones `<repo>` with your existing Git credentials
-- requires `SCODEX_POOL_KEY` in the environment and derives a symmetric encryption key from it
-- exports the local account pool into `.scodex-account-pool/bundle.enc.json` by default
-- the repository only stores the encrypted bundle; account auth files are not committed in plaintext
-- always pushes the current local snapshot as the source of truth; it does not merge remote account-pool history
-- commits and pushes only when the exported bundle changed
-- `--path <repo_path>`: use a different repository subdirectory; it must stay relative and must not contain `..`
-- `-i <identity_file>`: pass an SSH private key to git via `GIT_SSH_COMMAND` for SSH-based remotes
-- if `git` is missing, `scodex` prints an install hint instead of trying to install it for you
-- if the repository is private and access fails, `scodex` tells you to check the repo URL plus your Git credentials, SSH key, or PAT
-
-### `pull`
-
-```bash
-export SCODEX_POOL_KEY='replace-with-the-same-secret'
-scodex pull [-i <identity_file>] [--path <repo_path>] <repo>
-```
-
-- clones `<repo>` with your existing Git credentials
-- requires the same `SCODEX_POOL_KEY` used during `push`
-- reads the encrypted account pool from `.scodex-account-pool/bundle.enc.json` by default
-- force-overwrites the local account pool with the remote snapshot instead of merging
-- clears old local account homes and resets local usage cache before writing the pulled snapshot
-- refreshes live usage immediately after the import, then prints the latest account list
-- if the key is wrong, `pull` fails with a decryption error instead of importing partial data
-- `--path <repo_path>`: read from a different repository subdirectory; it must stay relative and must not contain `..`
-- `-i <identity_file>`: pass an SSH private key to git via `GIT_SSH_COMMAND` for SSH-based remotes
+- removes the account from local state and deletes its managed profile
+- asks for interactive confirmation unless `-y` is passed
 
 ### `list`
 
 ```bash
-scodex list
+sclaude list
 ```
 
-- refreshes live usage first, then prints the latest account quota snapshot
+- refreshes all known accounts first
+- renders a table with account label, plan, quota columns, reset time, and status
 
 ### `refresh`
 
 ```bash
-scodex refresh
+sclaude refresh
 ```
 
-- calls the live usage API for all known accounts
-- prints the refreshed account list immediately after the API calls finish
-- the current Rust release refreshes usage in parallel
+- refreshes all known accounts
+- prints a refreshed-count message and the latest account table
 
 ### `import-auth`
 
 ```bash
-scodex import-auth <path>
+sclaude import-auth <path>
 ```
 
-- `<path>` can be an `auth.json` file or a parent directory containing `auth.json`
+- `<path>` can be a Claude auth file or a parent directory containing one
+- imported profiles are copied into `sclaude` state storage as managed accounts
 
 ### `import-known`
 
 ```bash
-scodex import-known
+sclaude import-known
 ```
 
-- imports `~/.codex/auth.json`
-- to also import AI Accounts Hub managed Codex homes, set:
+- when `CLAUDE_CONFIG_DIR` is set, imports that live profile
+- otherwise imports the default local Claude profile from:
+  - `~/.claude.json`
+  - `~/.config.json`
+  - `~/.claude/`
+- prefers `claude auth status` when available, and falls back to local auth-file parsing
+
+### `push`
 
 ```bash
-AUTO_CODEX_IMPORT_ACCOUNTS_HUB=1 scodex import-known
+export SCLAUDE_POOL_KEY='replace-with-a-long-random-secret'
+sclaude push [-i <identity_file>] [--path <repo_path>] <repo>
 ```
+
+- clones the repository with your existing Git credentials
+- exports the full local account pool as an encrypted bundle
+- stores the bundle under `.sclaude-account-pool/bundle.enc.json` by default
+- only pushes when the encrypted bundle changed
+- `--path <repo_path>` must be a relative repository subdirectory
+- `-i <identity_file>` passes an SSH key to Git through `GIT_SSH_COMMAND`
+
+### `pull`
+
+```bash
+export SCLAUDE_POOL_KEY='replace-with-the-same-secret'
+sclaude pull [-i <identity_file>] [--path <repo_path>] <repo>
+```
+
+- clones the repository with your existing Git credentials
+- decrypts the remote account pool bundle
+- force-overwrites the local managed account pool instead of merging
+- refreshes account usage after import and prints the latest table
 
 ### `update`
 
 ```bash
-scodex update [-f|--force]
-scodex upgrade [-f|--force]
+sclaude update [-f|--force]
+sclaude upgrade [-f|--force]
 ```
 
-- downloads the latest matching GitHub Releases asset for the current platform and replaces the installed binary
-- `update` remains the primary command for compatibility with earlier scodex releases
-- `upgrade` is a compatible alias for users who prefer that wording
-- `-f`, `--force`: force reinstall even when the current version already matches the latest release tag
+- downloads the latest matching GitHub Releases asset from `lauzhihao/sclaude`
+- replaces the current `sclaude` executable
+- also updates sidecar binaries such as `opus`, `sonnet`, and `haiku`
+- `-f`, `--force` reinstalls even if the current version already matches the latest release
 
 ## Passthrough Behavior
 
-If the first non-global argument is not one of the documented subcommands, `scodex` treats it as a Codex CLI command after account selection.
+If the first non-global argument is not a declared `sclaude` subcommand, `sclaude` treats it as a Claude CLI command after account selection.
 
 Examples:
 
 ```bash
-scodex resume --last
-scodex exec "fix failing test"
+sclaude auth status
+sclaude mcp list
+opus auth status
 ```
 
-This is why `scodex resume --last` works even though `resume` is not a declared `scodex` subcommand.
+That is why `opus auth status` works even though `auth` is not a declared `sclaude` subcommand.
 
-## Selection Notes
+## Account Storage Notes
 
-- usage refresh runs against the live usage API, not only the local cache
-- account selection prefers higher `5h` remaining quota before weekly quota
-- the goal is to choose the account most likely to be immediately usable for the next session
-
-## Publish Checklist
-
-Before pushing:
-
-1. Run `rg -n 'access_token|refresh_token|id_token|OPENAI_API_KEY|account_id|@qq\\.com|/Users/ncds|/Users/liuzhihao' .`
-2. Confirm `git status --short` only shows code and docs.
-3. Review `git diff --cached` before pushing.
-
-## Release Notes
-
-- CI now targets the Rust implementation only.
-- Tagged releases `v*` publish prebuilt binaries through GitHub Actions.
-- The historical Python implementation has been removed from this repository.
+- managed accounts live under the resolved `sclaude` state directory
+- imported profiles are stored as isolated managed Claude homes
+- on macOS, credential bundles are stored in Keychain when possible
+- on other platforms, credential bundles fall back to local bundle files inside the managed account home

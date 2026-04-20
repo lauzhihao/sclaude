@@ -3,10 +3,10 @@ use std::ffi::OsString;
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use clap::{Args, Parser, Subcommand};
 
-use crate::adapters::claude::{AutofillRequest, ClaudeAdapter};
+use crate::adapters::claude::{ClaudeAdapter, LoginMode};
 use crate::core::state::{AccountRecord, UsageSnapshot};
 use crate::core::storage;
 use crate::core::ui;
@@ -28,8 +28,6 @@ pub enum Command {
     Auto(AutoArgs),
     Add(AddArgs),
     Login(LoginArgs),
-    #[command(visible_alias = "sync")]
-    Deploy(DeployArgs),
     Push(RepoSyncArgs),
     Pull(RepoSyncArgs),
     Use(UseArgs),
@@ -75,23 +73,25 @@ pub struct LoginArgs {
     #[arg(long)]
     pub oauth: bool,
     #[arg(long)]
+    pub api: bool,
+    #[arg(long)]
     pub username: Option<String>,
     #[arg(long)]
     pub password: Option<String>,
+    #[arg(long = "provider", value_name = "PROVIDER_ID")]
+    pub provider_id: Option<String>,
+    #[arg(long = "ANTHROPIC_BASE_URL", alias = "anthropic-base-url", value_name = "URL")]
+    pub anthropic_base_url: Option<String>,
+    #[arg(long = "ANTHROPIC_API_KEY", alias = "anthropic-api-key", value_name = "KEY")]
+    pub anthropic_api_key: Option<String>,
 }
 
 #[derive(Debug, Args)]
 pub struct AddArgs {
     #[arg(long)]
     pub switch: bool,
-}
-
-#[derive(Debug, Args)]
-pub struct DeployArgs {
-    #[arg(short = 'i', value_name = "IDENTITY_FILE")]
-    pub identity_file: Option<PathBuf>,
-
-    pub target: String,
+    #[command(flatten)]
+    pub login: LoginArgs,
 }
 
 #[derive(Debug, Args)]
@@ -213,12 +213,8 @@ pub fn run(cli: Cli) -> Result<i32> {
             }
         }
         Command::Login(args) => {
-            let record = if args.oauth {
-                let request = build_autofill_request(&args, &ui)?;
-                adapter.run_device_auth_login_autofill(&state_dir, &mut state, request)?
-            } else {
-                adapter.run_interactive_login(&state_dir, &mut state, args.username.as_deref())?
-            };
+            let mode = resolve_login_mode(&args)?;
+            let record = adapter.run_login_mode(&state_dir, &mut state, mode)?;
             let usage = adapter.refresh_account_usage(&mut state, &record);
             println!("{}", ui.added_account(&record.email));
             adapter.switch_account(&record)?;
@@ -228,7 +224,8 @@ pub fn run(cli: Cli) -> Result<i32> {
             0
         }
         Command::Add(args) => {
-            let record = adapter.add_account_via_browser(&state_dir, &mut state)?;
+            let mode = resolve_login_mode(&args.login)?;
+            let record = adapter.add_account_via_browser(&state_dir, &mut state, mode)?;
             let usage = adapter.refresh_account_usage(&mut state, &record);
             println!("{}", ui.added_account(&record.email));
             if args.switch {
@@ -291,24 +288,6 @@ pub fn run(cli: Cli) -> Result<i32> {
             adapter.remove_account(&state_dir, &mut state, &id)?;
             storage::save_state(&state_dir, &state)?;
             println!("{}", ui.removed_account(&email));
-            0
-        }
-        Command::Deploy(args) => {
-            let Some(account_id) = state.current_account_id.as_ref() else {
-                println!("{}", ui.no_usable_account());
-                storage::save_state(&state_dir, &state)?;
-                return Ok(1);
-            };
-            let Some(account) = state
-                .accounts
-                .iter()
-                .find(|account| &account.id == account_id)
-            else {
-                println!("{}", ui.no_usable_account());
-                storage::save_state(&state_dir, &state)?;
-                return Ok(1);
-            };
-            adapter.deploy_live_auth(account, &args.target, args.identity_file.as_deref())?;
             0
         }
         Command::Push(args) => {
@@ -441,14 +420,44 @@ fn format_percent(value: Option<i64>) -> String {
         .unwrap_or_else(|| ui.na().into())
 }
 
-fn build_autofill_request(args: &LoginArgs, ui: &ui::Messages) -> Result<AutofillRequest> {
-    match args.username.as_deref() {
-        Some(email) if !email.trim().is_empty() => Ok(AutofillRequest {
-            email: email.trim().to_string(),
-            password: args.password.clone().unwrap_or_default(),
-        }),
-        _ => anyhow::bail!("{}", ui.login_autofill_missing_credentials()),
+fn resolve_login_mode(args: &LoginArgs) -> Result<LoginMode<'_>> {
+    if args.oauth && args.api {
+        bail!("--oauth and --api cannot be used together");
     }
+
+    if args.api {
+        let provider_id = args
+            .provider_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| anyhow::anyhow!("--api requires --provider"))?;
+        let base_url = args
+            .anthropic_base_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| anyhow::anyhow!("--api requires --ANTHROPIC_BASE_URL"))?;
+        let api_key = args
+            .anthropic_api_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| anyhow::anyhow!("--api requires --ANTHROPIC_API_KEY"))?;
+        return Ok(LoginMode::Api {
+            provider_id,
+            base_url,
+            api_key,
+        });
+    }
+
+    Ok(LoginMode::Oauth {
+        email_hint: args
+            .username
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty()),
+    })
 }
 
 fn print_selection(prefix: &str, account: &AccountRecord, usage: &UsageSnapshot) {
@@ -468,7 +477,6 @@ enum HelpTopic {
     Auto,
     Add,
     Login,
-    Deploy,
     Push,
     Pull,
     Use,
@@ -517,7 +525,6 @@ fn command_help_topic(name: &str) -> Option<HelpTopic> {
         "auto" => Some(HelpTopic::Auto),
         "add" => Some(HelpTopic::Add),
         "login" => Some(HelpTopic::Login),
-        "deploy" | "sync" => Some(HelpTopic::Deploy),
         "push" => Some(HelpTopic::Push),
         "pull" => Some(HelpTopic::Pull),
         "use" => Some(HelpTopic::Use),
@@ -562,17 +569,12 @@ fn render_help_en(topic: HelpTopic) -> String {
             .unwrap();
             writeln!(
                 &mut out,
-                "  add          Open the signup page, then add one account"
+                "  add          Add one account through the same login flow as `login`"
             )
             .unwrap();
             writeln!(
                 &mut out,
-                "  login        Add one account through Claude login"
-            )
-            .unwrap();
-            writeln!(
-                &mut out,
-                "  deploy       Copy the current Claude profile to a remote machine [alias: sync]"
+                "  login        Add one account through OAuth or API credentials"
             )
             .unwrap();
             writeln!(
@@ -587,10 +589,14 @@ fn render_help_en(topic: HelpTopic) -> String {
             .unwrap();
             writeln!(
                 &mut out,
-                "  use          Switch directly to a known account by email"
+                "  use          Switch directly to a known account by displayed label"
             )
             .unwrap();
-            writeln!(&mut out, "  rm           Remove a stored account by email").unwrap();
+            writeln!(
+                &mut out,
+                "  rm           Remove a stored account by displayed label"
+            )
+            .unwrap();
             writeln!(&mut out, "  list         Show the latest account quotas").unwrap();
             writeln!(
                 &mut out,
@@ -685,54 +691,77 @@ fn render_help_en(topic: HelpTopic) -> String {
             writeln!(&mut out, "  sclaude add [OPTIONS]").unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "Options:").unwrap();
+            writeln!(&mut out, "      --oauth                Use Claude official OAuth login").unwrap();
+            writeln!(&mut out, "      --api                  Add one API-backed account instead of OAuth").unwrap();
             writeln!(
                 &mut out,
-                "      --switch  Switch to the newly added account after signup/login"
+                "      --provider <PROVIDER_ID>  Required with --api; used for display labels such as key-xxxx@poe.com"
             )
             .unwrap();
-            writeln!(&mut out, "  -h, --help    Print help").unwrap();
+            writeln!(
+                &mut out,
+                "      --ANTHROPIC_BASE_URL <URL>  Required with --api"
+            )
+            .unwrap();
+            writeln!(
+                &mut out,
+                "      --ANTHROPIC_API_KEY <KEY>   Required with --api"
+            )
+            .unwrap();
+            writeln!(
+                &mut out,
+                "      --username <EMAIL>     Optional email hint passed to OAuth login"
+            )
+            .unwrap();
+            writeln!(
+                &mut out,
+                "      --password <PASS>      Reserved for compatibility with scodex"
+            )
+            .unwrap();
+            writeln!(
+                &mut out,
+                "      --switch               Switch to the newly added account after login"
+            )
+            .unwrap();
+            writeln!(&mut out, "  -h, --help                 Print help").unwrap();
         }
         HelpTopic::Login => {
             writeln!(&mut out, "Usage:").unwrap();
             writeln!(&mut out, "  sclaude login [OPTIONS]").unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "Options:").unwrap();
+            writeln!(&mut out, "      --oauth                Use Claude official OAuth login").unwrap();
             writeln!(
                 &mut out,
-                "      --oauth              Use the compatibility browser-assisted login flow; currently uses --username as the email hint"
+                "      --api                  Add one API-backed account instead of OAuth"
             )
             .unwrap();
             writeln!(
                 &mut out,
-                "      --username <EMAIL>   Email hint passed to Claude login"
+                "      --provider <PROVIDER_ID>  Required with --api; used for display labels such as key-xxxx@poe.com"
             )
             .unwrap();
             writeln!(
                 &mut out,
-                "      --password <PASS>    Reserved for compatibility with scodex; currently ignored"
+                "      --ANTHROPIC_BASE_URL <URL>  Required with --api"
             )
             .unwrap();
-            writeln!(&mut out, "  -h, --help               Print help").unwrap();
-        }
-        HelpTopic::Deploy => {
-            writeln!(&mut out, "Usage:").unwrap();
-            writeln!(&mut out, "  sclaude deploy [OPTIONS] <TARGET>").unwrap();
-            writeln!(&mut out, "  sclaude sync [OPTIONS] <TARGET>").unwrap();
-            writeln!(&mut out).unwrap();
-            writeln!(&mut out, "Arguments:").unwrap();
             writeln!(
                 &mut out,
-                "  <TARGET>  Remote destination in the form user@host:/target_path"
+                "      --ANTHROPIC_API_KEY <KEY>   Required with --api"
             )
             .unwrap();
-            writeln!(&mut out).unwrap();
-            writeln!(&mut out, "Options:").unwrap();
             writeln!(
                 &mut out,
-                "  -i <IDENTITY_FILE>  Pass an SSH identity file to ssh/scp"
+                "      --username <EMAIL>     Optional email hint passed to OAuth login"
             )
             .unwrap();
-            writeln!(&mut out, "  -h, --help          Print help").unwrap();
+            writeln!(
+                &mut out,
+                "      --password <PASS>      Reserved for compatibility with scodex"
+            )
+            .unwrap();
+            writeln!(&mut out, "  -h, --help                 Print help").unwrap();
         }
         HelpTopic::Push => {
             writeln!(&mut out, "Usage:").unwrap();
@@ -799,7 +828,7 @@ fn render_help_en(topic: HelpTopic) -> String {
             writeln!(&mut out, "  sclaude use <EMAIL>").unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "Arguments:").unwrap();
-            writeln!(&mut out, "  <EMAIL>  Account email to switch to").unwrap();
+            writeln!(&mut out, "  <EMAIL>  Account label shown by `list`").unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "Options:").unwrap();
             writeln!(&mut out, "  -h, --help  Print help").unwrap();
@@ -809,7 +838,7 @@ fn render_help_en(topic: HelpTopic) -> String {
             writeln!(&mut out, "  sclaude rm [OPTIONS] <EMAIL>").unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "Arguments:").unwrap();
-            writeln!(&mut out, "  <EMAIL>  Account email to remove").unwrap();
+            writeln!(&mut out, "  <EMAIL>  Account label shown by `list`").unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "Options:").unwrap();
             writeln!(
@@ -887,17 +916,12 @@ fn render_help_zh(topic: HelpTopic) -> String {
             )
             .unwrap();
             writeln!(&mut out, "  auto         切换到最佳账号，但不启动 Claude").unwrap();
-            writeln!(&mut out, "  add          打开注册页，然后新增一个账号").unwrap();
-            writeln!(&mut out, "  login        通过 Claude 登录新增一个账号").unwrap();
-            writeln!(
-                &mut out,
-                "  deploy       把当前 Claude 配置复制到远端机器 [别名：sync]"
-            )
-            .unwrap();
+            writeln!(&mut out, "  add          通过与 `login` 相同的流程新增一个账号").unwrap();
+            writeln!(&mut out, "  login        通过 OAuth 或 API 凭据新增一个账号").unwrap();
             writeln!(&mut out, "  push         把本地账号池推送到 Git 仓库").unwrap();
             writeln!(&mut out, "  pull         从 Git 仓库拉取账号池").unwrap();
-            writeln!(&mut out, "  use          按邮箱直接切换到一个已知账号").unwrap();
-            writeln!(&mut out, "  rm           按邮箱删除一个已保存的账号").unwrap();
+            writeln!(&mut out, "  use          按 `list` 中显示的标识切换账号").unwrap();
+            writeln!(&mut out, "  rm           按 `list` 中显示的标识删除账号").unwrap();
             writeln!(&mut out, "  list         显示最新账号额度").unwrap();
             writeln!(&mut out, "  refresh      刷新所有已知账号的实时额度").unwrap();
             writeln!(&mut out, "  update       自更新 sclaude [别名：upgrade]").unwrap();
@@ -960,50 +984,69 @@ fn render_help_zh(topic: HelpTopic) -> String {
             writeln!(&mut out, "  sclaude add [选项]").unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "选项：").unwrap();
-            writeln!(&mut out, "      --switch  注册/登录完成后切换到新账号").unwrap();
-            writeln!(&mut out, "  -h, --help    显示帮助").unwrap();
+            writeln!(&mut out, "      --oauth                使用 Claude 官方 OAuth 登录").unwrap();
+            writeln!(&mut out, "      --api                  添加一个 API 模式账号").unwrap();
+            writeln!(
+                &mut out,
+                "      --provider <PROVIDER_ID>  配合 --api 使用；用于显示成 key-xxxx@poe.com 这类标识"
+            )
+            .unwrap();
+            writeln!(
+                &mut out,
+                "      --ANTHROPIC_BASE_URL <URL>  配合 --api 使用"
+            )
+            .unwrap();
+            writeln!(
+                &mut out,
+                "      --ANTHROPIC_API_KEY <KEY>   配合 --api 使用"
+            )
+            .unwrap();
+            writeln!(
+                &mut out,
+                "      --username <EMAIL>     可选，作为 OAuth 登录邮箱提示"
+            )
+            .unwrap();
+            writeln!(
+                &mut out,
+                "      --password <PASS>      为兼容 scodex 保留"
+            )
+            .unwrap();
+            writeln!(&mut out, "      --switch               登录完成后切换到新账号").unwrap();
+            writeln!(&mut out, "  -h, --help                 显示帮助").unwrap();
         }
         HelpTopic::Login => {
             writeln!(&mut out, "用法：").unwrap();
             writeln!(&mut out, "  sclaude login [选项]").unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "选项：").unwrap();
+            writeln!(&mut out, "      --oauth                使用 Claude 官方 OAuth 登录").unwrap();
+            writeln!(&mut out, "      --api                  添加一个 API 模式账号").unwrap();
             writeln!(
                 &mut out,
-                "      --oauth              使用兼容的浏览器辅助登录流程；当前会把 --username 作为邮箱提示"
+                "      --provider <PROVIDER_ID>  配合 --api 使用；用于显示成 key-xxxx@poe.com 这类标识"
             )
             .unwrap();
             writeln!(
                 &mut out,
-                "      --username <EMAIL>   传给 Claude 登录的邮箱提示"
+                "      --ANTHROPIC_BASE_URL <URL>  配合 --api 使用"
             )
             .unwrap();
             writeln!(
                 &mut out,
-                "      --password <PASS>    为兼容 scodex 保留，当前会被忽略"
+                "      --ANTHROPIC_API_KEY <KEY>   配合 --api 使用"
             )
             .unwrap();
-            writeln!(&mut out, "  -h, --help               显示帮助").unwrap();
-        }
-        HelpTopic::Deploy => {
-            writeln!(&mut out, "用法：").unwrap();
-            writeln!(&mut out, "  sclaude deploy [选项] <TARGET>").unwrap();
-            writeln!(&mut out, "  sclaude sync [选项] <TARGET>").unwrap();
-            writeln!(&mut out).unwrap();
-            writeln!(&mut out, "参数：").unwrap();
             writeln!(
                 &mut out,
-                "  <TARGET>  远端目标，格式为 user@host:/target_path"
+                "      --username <EMAIL>     可选，作为 OAuth 登录邮箱提示"
             )
             .unwrap();
-            writeln!(&mut out).unwrap();
-            writeln!(&mut out, "选项：").unwrap();
             writeln!(
                 &mut out,
-                "  -i <IDENTITY_FILE>  传给 ssh/scp 的 SSH 身份文件"
+                "      --password <PASS>      为兼容 scodex 保留"
             )
             .unwrap();
-            writeln!(&mut out, "  -h, --help          显示帮助").unwrap();
+            writeln!(&mut out, "  -h, --help                 显示帮助").unwrap();
         }
         HelpTopic::Push => {
             writeln!(&mut out, "用法：").unwrap();
@@ -1054,7 +1097,7 @@ fn render_help_zh(topic: HelpTopic) -> String {
             writeln!(&mut out, "  sclaude use <EMAIL>").unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "参数：").unwrap();
-            writeln!(&mut out, "  <EMAIL>  要切换到的账号邮箱").unwrap();
+            writeln!(&mut out, "  <EMAIL>  `list` 中显示的账号标识").unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "选项：").unwrap();
             writeln!(&mut out, "  -h, --help  显示帮助").unwrap();
@@ -1064,7 +1107,7 @@ fn render_help_zh(topic: HelpTopic) -> String {
             writeln!(&mut out, "  sclaude rm [选项] <EMAIL>").unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "参数：").unwrap();
-            writeln!(&mut out, "  <EMAIL>  要删除的账号邮箱").unwrap();
+            writeln!(&mut out, "  <EMAIL>  `list` 中显示的账号标识").unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "选项：").unwrap();
             writeln!(&mut out, "  -y, --yes   跳过交互式二次确认").unwrap();

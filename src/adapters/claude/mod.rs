@@ -7,8 +7,13 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
+use serde_json::json;
 use uuid::Uuid;
 
+use self::auth::{
+    LiveIdentityWithPlan, api_display_name, api_identity_fingerprint, normalize_api_base_url,
+    normalize_api_provider_id,
+};
 use self::paths::{
     claude_config_root, claude_install_command, default_claude_auth_file, find_claude_bin,
     find_in_path, profile_root_for_account,
@@ -21,20 +26,25 @@ use crate::core::ui as core_ui;
 mod account;
 mod auth;
 mod credentials;
-mod deploy;
 mod paths;
 mod repo_sync;
 mod ui;
 mod usage;
 
-#[derive(Debug, Clone)]
-pub struct AutofillRequest {
-    pub email: String,
-    pub password: String,
-}
-
 #[derive(Debug, Default)]
 pub struct ClaudeAdapter;
+
+#[derive(Debug, Clone, Copy)]
+pub enum LoginMode<'a> {
+    Oauth {
+        email_hint: Option<&'a str>,
+    },
+    Api {
+        provider_id: &'a str,
+        base_url: &'a str,
+        api_key: &'a str,
+    },
+}
 
 impl CliAdapter for ClaudeAdapter {
     fn id(&self) -> &'static str {
@@ -59,22 +69,27 @@ impl ClaudeAdapter {
         &self,
         state_dir: &Path,
         state: &mut State,
+        mode: LoginMode<'_>,
     ) -> Result<AccountRecord> {
-        const SIGNUP_URL: &str = "https://claude.ai";
-        let ui = core_ui::messages();
+        self.run_login_mode(state_dir, state, mode)
+    }
 
-        println!("{}", ui.add_opening_signup());
-        match try_open_signup_page(SIGNUP_URL) {
-            Ok(BrowserOpenOutcome::Opened) => println!("{}", ui.add_opened_signup(SIGNUP_URL)),
-            Ok(BrowserOpenOutcome::NoGui) => {
-                println!("{}", ui.add_no_gui_open_manually(SIGNUP_URL))
+    pub fn run_login_mode(
+        &self,
+        state_dir: &Path,
+        state: &mut State,
+        mode: LoginMode<'_>,
+    ) -> Result<AccountRecord> {
+        match mode {
+            LoginMode::Oauth { email_hint } => {
+                self.run_interactive_login(state_dir, state, email_hint)
             }
-            Ok(BrowserOpenOutcome::Failed) | Err(_) => {
-                println!("{}", ui.add_browser_open_failed(SIGNUP_URL))
-            }
+            LoginMode::Api {
+                provider_id,
+                base_url,
+                api_key,
+            } => self.run_api_key_login(state_dir, state, provider_id, base_url, api_key),
         }
-        self.wait_for_enter_after_signup()?;
-        self.run_interactive_login(state_dir, state, None)
     }
 
     pub fn read_live_identity(&self) -> Option<LiveIdentity> {
@@ -229,16 +244,6 @@ impl ClaudeAdapter {
         Ok(record)
     }
 
-    pub fn run_device_auth_login_autofill(
-        &self,
-        state_dir: &Path,
-        state: &mut State,
-        request: AutofillRequest,
-    ) -> Result<AccountRecord> {
-        let _ = request.password;
-        self.run_interactive_login(state_dir, state, Some(&request.email))
-    }
-
     fn wait_for_enter_after_signup(&self) -> Result<()> {
         let ui = core_ui::messages();
         println!("{}", ui.add_finish_signup_then_continue());
@@ -252,6 +257,55 @@ impl ClaudeAdapter {
             .read_line(&mut line)
             .context("failed to read continuation input")?;
         Ok(())
+    }
+
+    pub fn run_api_key_login(
+        &self,
+        state_dir: &Path,
+        state: &mut State,
+        provider_id: &str,
+        base_url: &str,
+        api_key: &str,
+    ) -> Result<AccountRecord> {
+        let normalized_provider = normalize_api_provider_id(provider_id)?;
+        let normalized_base_url = normalize_api_base_url(base_url)?;
+        let normalized_api_key = api_key.trim();
+        if normalized_api_key.is_empty() {
+            bail!("ANTHROPIC_API_KEY cannot be empty");
+        }
+
+        let temp_root = state_dir.join(".tmp");
+        fs::create_dir_all(&temp_root)
+            .with_context(|| format!("failed to create {}", temp_root.display()))?;
+        let tmp_home = temp_root.join(format!("sclaude-api-login-{}", Uuid::new_v4()));
+        fs::create_dir_all(&tmp_home)
+            .with_context(|| format!("failed to create {}", tmp_home.display()))?;
+
+        let auth_path = paths::managed_auth_file(&tmp_home);
+        let auth_json = json!({
+            "ANTHROPIC_BASE_URL": normalized_base_url,
+            "ANTHROPIC_API_KEY": normalized_api_key,
+            "providerId": normalized_provider,
+        });
+        fs::write(&auth_path, serde_json::to_vec_pretty(&auth_json)?)
+            .with_context(|| format!("failed to write {}", auth_path.display()))?;
+
+        let identity = LiveIdentityWithPlan {
+            email: api_display_name(normalized_api_key, &normalized_provider),
+            account_kind: Some("api".into()),
+            provider_id: Some(normalized_provider.clone()),
+            account_id: None,
+            identity_fingerprint: Some(api_identity_fingerprint(
+                &normalized_base_url,
+                normalized_api_key,
+            )),
+            plan: None,
+        };
+        let record = self.import_auth_path_with_identity(
+            state_dir, state, &auth_path, Some(&tmp_home), identity,
+        )?;
+        let _ = fs::remove_dir_all(&tmp_home);
+        Ok(record)
     }
 
     pub fn launch_claude(

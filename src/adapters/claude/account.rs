@@ -52,6 +52,17 @@ impl ClaudeAdapter {
         )
     }
 
+    pub(super) fn import_auth_path_with_identity(
+        &self,
+        state_dir: &Path,
+        state: &mut State,
+        source_auth: &Path,
+        source_root: Option<&Path>,
+        identity: LiveIdentityWithPlan,
+    ) -> Result<AccountRecord> {
+        self.import_profile_source(state_dir, state, source_auth, source_root, identity, None)
+    }
+
     fn import_profile_source(
         &self,
         state_dir: &Path,
@@ -64,8 +75,13 @@ impl ClaudeAdapter {
         let source_root = source_root.filter(|path| path.exists());
         let bundle = capture_credential_bundle(source_root, source_auth)?;
 
-        let existing =
-            find_matching_account(state, &identity.email, identity.account_id.as_deref()).cloned();
+        let existing = find_matching_account(
+            state,
+            &identity.email,
+            identity.account_id.as_deref(),
+            identity.identity_fingerprint.as_deref(),
+        )
+        .cloned();
         let account_id = existing
             .as_ref()
             .map(|item| item.id.clone())
@@ -89,7 +105,10 @@ impl ClaudeAdapter {
         let record = AccountRecord {
             id: account_id,
             email: identity.email,
+            account_kind: identity.account_kind,
+            provider_id: identity.provider_id,
             account_id: identity.account_id,
+            identity_fingerprint: identity.identity_fingerprint,
             plan: identity.plan,
             auth_path: managed_auth_file(&account_home)
                 .to_string_lossy()
@@ -317,9 +336,12 @@ fn find_matching_account<'a>(
     state: &'a State,
     email: &str,
     account_id: Option<&str>,
+    identity_fingerprint: Option<&str>,
 ) -> Option<&'a AccountRecord> {
     state.accounts.iter().find(|account| {
-        account.email.eq_ignore_ascii_case(email)
+        identity_fingerprint.is_some_and(|candidate| {
+            account.identity_fingerprint.as_deref() == Some(candidate)
+        }) || account.email.eq_ignore_ascii_case(email)
             || account_id.is_some_and(|candidate| account.account_id.as_deref() == Some(candidate))
     })
 }
