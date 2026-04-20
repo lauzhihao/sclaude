@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::core::state::AccountRecord;
+use crate::core::storage;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct InstallCommand {
@@ -40,12 +41,15 @@ pub(super) fn default_claude_auth_file() -> Option<PathBuf> {
         .find(|path| path.exists())
 }
 
-pub(super) fn claude_install_command() -> InstallCommand {
+pub(super) fn claude_install_command(state_dir: &Path) -> InstallCommand {
+    let runtime_root = claude_runtime_root(state_dir);
     InstallCommand {
         program: npm_command_name().to_string(),
         args: vec![
             "install".into(),
-            "-g".into(),
+            "--global".into(),
+            "--prefix".into(),
+            runtime_root.to_string_lossy().into_owned(),
             "@anthropic-ai/claude-code".into(),
         ],
     }
@@ -55,12 +59,29 @@ fn npm_command_name() -> &'static str {
     if cfg!(windows) { "npm.cmd" } else { "npm" }
 }
 
-pub(super) fn find_claude_bin() -> Option<PathBuf> {
+pub(super) fn find_claude_bin(state_dir: Option<&Path>) -> Option<PathBuf> {
     if let Some(env) = env::var_os("CLAUDE_BIN") {
         let path = PathBuf::from(env);
         if path.exists() {
             return Some(path);
         }
+    }
+
+    if let Some(state_dir) = state_dir {
+        if let Some(path) = claude_runtime_binary_candidates(state_dir)
+            .into_iter()
+            .find(|path| path.exists())
+        {
+            return Some(path);
+        }
+    }
+
+    if let Some(default_state_dir) = default_state_dir()
+        && let Some(path) = claude_runtime_binary_candidates(&default_state_dir)
+            .into_iter()
+            .find(|path| path.exists())
+    {
+        return Some(path);
     }
 
     for candidate in claude_binary_names() {
@@ -79,6 +100,40 @@ pub(super) fn find_claude_bin() -> Option<PathBuf> {
     }
 
     npm_global_claude_bin()
+}
+
+fn default_state_dir() -> Option<PathBuf> {
+    storage::resolve_state_dir(None).ok()
+}
+
+fn claude_runtime_root(state_dir: &Path) -> PathBuf {
+    storage::runtime_dir(state_dir).join("claude-code")
+}
+
+fn claude_runtime_binary_candidates(state_dir: &Path) -> Vec<PathBuf> {
+    let runtime_root = claude_runtime_root(state_dir);
+    if cfg!(windows) {
+        vec![
+            runtime_root.join("claude.cmd"),
+            runtime_root.join("claude.exe"),
+            runtime_root
+                .join("node_modules")
+                .join(".bin")
+                .join("claude.cmd"),
+            runtime_root
+                .join("node_modules")
+                .join(".bin")
+                .join("claude.exe"),
+        ]
+    } else {
+        vec![
+            runtime_root.join("bin").join("claude"),
+            runtime_root
+                .join("node_modules")
+                .join(".bin")
+                .join("claude"),
+        ]
+    }
 }
 
 fn claude_binary_names() -> &'static [&'static str] {
@@ -195,15 +250,29 @@ pub(super) fn find_program(candidates: &[&str]) -> Option<PathBuf> {
 mod tests {
     use std::fs;
 
+    use crate::core::storage;
+
     use super::{claude_install_command, find_claude_auth_file};
 
     #[test]
     fn install_command_uses_official_npm_package() {
-        let command = claude_install_command();
+        let state_dir = storage::resolve_state_dir(None).expect("state dir");
+        let command = claude_install_command(&state_dir);
         assert!(command.program == "npm" || command.program == "npm.cmd");
+        let expected_prefix = state_dir
+            .join("runtime")
+            .join("claude-code")
+            .to_string_lossy()
+            .into_owned();
         assert_eq!(
             command.args,
-            vec!["install", "-g", "@anthropic-ai/claude-code"]
+            vec![
+                "install".to_string(),
+                "--global".to_string(),
+                "--prefix".to_string(),
+                expected_prefix,
+                "@anthropic-ai/claude-code".to_string(),
+            ]
         );
     }
 

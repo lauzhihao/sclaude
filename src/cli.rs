@@ -183,7 +183,12 @@ pub fn run(cli: Cli) -> Result<i32> {
                         if args.no_launch {
                             0
                         } else {
-                            adapter.launch_claude(&account, &args.extra_args, !args.no_resume)?
+                            adapter.launch_claude(
+                                &state_dir,
+                                &account,
+                                &args.extra_args,
+                                !args.no_resume,
+                            )?
                         }
                     }
                 }
@@ -221,7 +226,7 @@ pub fn run(cli: Cli) -> Result<i32> {
         Command::Login(args) => {
             let mode = resolve_login_mode(&args)?;
             let record = adapter.run_login_mode(&state_dir, &mut state, mode)?;
-            let usage = adapter.refresh_account_usage(&mut state, &record);
+            let usage = adapter.refresh_account_usage(&state_dir, &mut state, &record);
             println!("{}", ui.added_account(&record.email));
             adapter.switch_account(&record)?;
             state.current_account_id = Some(record.id.clone());
@@ -232,7 +237,7 @@ pub fn run(cli: Cli) -> Result<i32> {
         Command::Add(args) => {
             let mode = resolve_login_mode(&args.login)?;
             let record = adapter.add_account_via_browser(&state_dir, &mut state, mode)?;
-            let usage = adapter.refresh_account_usage(&mut state, &record);
+            let usage = adapter.refresh_account_usage(&state_dir, &mut state, &record);
             println!("{}", ui.added_account(&record.email));
             if args.switch {
                 adapter.switch_account(&record)?;
@@ -299,6 +304,7 @@ pub fn run(cli: Cli) -> Result<i32> {
         Command::Push(args) => {
             let repo = resolve_repo_sync_repo(&state_dir, args.repo.as_deref())?;
             let outcome = adapter.push_account_pool(
+                &state_dir,
                 &state,
                 &repo,
                 args.path.as_deref(),
@@ -328,21 +334,21 @@ pub fn run(cli: Cli) -> Result<i32> {
                 "{}",
                 ui.repo_pull_completed(&repo, outcome.imported_accounts)
             );
-            adapter.refresh_all_accounts(&mut state);
+            adapter.refresh_all_accounts(&state_dir, &mut state);
             storage::save_state(&state_dir, &state)?;
             let active = adapter.active_identity_from_state(&state);
             println!("{}", adapter.render_account_table(&state, active.as_ref()));
             0
         }
         Command::List => {
-            adapter.refresh_all_accounts(&mut state);
+            adapter.refresh_all_accounts(&state_dir, &mut state);
             storage::save_state(&state_dir, &state)?;
             let active = adapter.active_identity_from_state(&state);
             println!("{}", adapter.render_account_table(&state, active.as_ref()));
             0
         }
         Command::Refresh => {
-            adapter.refresh_all_accounts(&mut state);
+            adapter.refresh_all_accounts(&state_dir, &mut state);
             storage::save_state(&state_dir, &state)?;
             let active = adapter.active_identity_from_state(&state);
             println!("{}", adapter.render_account_table(&state, active.as_ref()));
@@ -350,7 +356,7 @@ pub fn run(cli: Cli) -> Result<i32> {
             0
         }
         Command::Update(args) => {
-            let outcome = update::self_update(args.force)?;
+            let outcome = update::self_update(&state_dir, args.force)?;
             match outcome.status {
                 update::UpdateStatus::AlreadyCurrent => {
                     println!(
@@ -407,7 +413,7 @@ pub fn run(cli: Cli) -> Result<i32> {
                 Some((account, usage)) => {
                     print_selection(ui.selection_switched(), &account, &usage);
                     storage::save_state(&state_dir, &state)?;
-                    adapter.run_passthrough(&account, &args)?
+                    adapter.run_passthrough(&state_dir, &account, &args)?
                 }
                 None => {
                     println!("{}", ui.no_usable_account());

@@ -1,7 +1,10 @@
 $ErrorActionPreference = "Stop"
 
 $Repo = if ($env:SCLAUDE_REPO) { $env:SCLAUDE_REPO } else { "lauzhihao/sclaude" }
-$InstallBin = if ($env:INSTALL_BIN) { $env:INSTALL_BIN } else { Join-Path $HOME ".local\bin" }
+$SclaudeHome = if ($env:SCLAUDE_HOME) { $env:SCLAUDE_HOME } else { Join-Path $HOME ".sclaude" }
+$env:SCLAUDE_HOME = $SclaudeHome
+$InstallBin = if ($env:INSTALL_BIN) { $env:INSTALL_BIN } else { Join-Path $SclaudeHome "bin" }
+$TmpRoot = Join-Path $SclaudeHome "tmp"
 $WrapperPath = Join-Path $InstallBin "sclaude.exe"
 $OpusPath = Join-Path $InstallBin "opus.exe"
 $SonnetPath = Join-Path $InstallBin "sonnet.exe"
@@ -45,6 +48,29 @@ function Ensure-UserPath {
 function Install-OriginalWrapper {
   @"
 @echo off
+if not defined SCLAUDE_HOME set "SCLAUDE_HOME=%USERPROFILE%\.sclaude"
+if defined CLAUDE_BIN (
+  if exist "%CLAUDE_BIN%" (
+    "%CLAUDE_BIN%" %*
+    exit /b %errorlevel%
+  )
+)
+if exist "%SCLAUDE_HOME%\runtime\claude-code\claude.cmd" (
+  "%SCLAUDE_HOME%\runtime\claude-code\claude.cmd" %*
+  exit /b %errorlevel%
+)
+if exist "%SCLAUDE_HOME%\runtime\claude-code\claude.exe" (
+  "%SCLAUDE_HOME%\runtime\claude-code\claude.exe" %*
+  exit /b %errorlevel%
+)
+if exist "%SCLAUDE_HOME%\runtime\claude-code\node_modules\.bin\claude.cmd" (
+  "%SCLAUDE_HOME%\runtime\claude-code\node_modules\.bin\claude.cmd" %*
+  exit /b %errorlevel%
+)
+if exist "%SCLAUDE_HOME%\runtime\claude-code\node_modules\.bin\claude.exe" (
+  "%SCLAUDE_HOME%\runtime\claude-code\node_modules\.bin\claude.exe" %*
+  exit /b %errorlevel%
+)
 where claude >nul 2>nul
 if %errorlevel% neq 0 (
   echo claude not found on PATH. 1>&2
@@ -69,7 +95,8 @@ $target = Resolve-Target
 $version = Resolve-Version
 $asset = "sclaude-$version-$target.zip"
 $url = "https://github.com/$Repo/releases/download/$version/$asset"
-$tmp = Join-Path ([IO.Path]::GetTempPath()) ("sclaude-install-" + [guid]::NewGuid())
+New-Item -ItemType Directory -Path $TmpRoot -Force | Out-Null
+$tmp = Join-Path $TmpRoot ("install-" + [guid]::NewGuid())
 New-Item -ItemType Directory -Path $tmp | Out-Null
 New-Item -ItemType Directory -Path $InstallBin -Force | Out-Null
 
@@ -90,6 +117,7 @@ Install-OriginalWrapper
 Ensure-UserPath
 Post-InstallImport
 
+Write-Host "SCLAUDE_HOME is $SclaudeHome"
 Write-Host "Installed to $WrapperPath"
 Write-Host "Installed model entrypoints to $OpusPath, $SonnetPath, $HaikuPath"
 Write-Host "Installed passthrough helper to $OriginalWrapperPath"

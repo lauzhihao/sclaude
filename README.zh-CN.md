@@ -31,17 +31,32 @@ irm https://raw.githubusercontent.com/lauzhihao/sclaude/main/install.ps1 | iex
 安装脚本会：
 
 - 下载最新发布的 `sclaude` 二进制
-- 安装 `sclaude` 作为主命令
-- 安装 `opus`、`sonnet`、`haiku` 作为模型入口
-- 安装 `sclaude-original` 作为到底层 `claude` 的透传辅助命令
+- 使用 `SCLAUDE_HOME`，默认是 `~/.sclaude`
+- 把 `sclaude` 主命令安装到 `$SCLAUDE_HOME/bin`
+- 把 `opus`、`sonnet`、`haiku` 模型入口安装到 `$SCLAUDE_HOME/bin`
+- 把 `sclaude-original` 透传辅助命令安装到 `$SCLAUDE_HOME/bin`
 - 当检测到 `~/.claude.json`、`~/.config.json`、`~/.claude/.claude.json` 或 `~/.claude/.config.json` 时，自动导入当前 Claude 配置
+
+设置 `SCLAUDE_HOME` 可以移动完整的受管目录。只有你明确希望入口二进制放到 `$SCLAUDE_HOME/bin` 之外时，才需要覆盖 `INSTALL_BIN`。
+
+默认受管目录布局：
+
+```text
+~/.sclaude/
+  bin/
+  runtime/
+  tmp/
+  accounts/
+  state.json
+  repo-sync.json
+```
 
 ## 依赖
 
 - Unix 安装器：`bash`、`curl`、`tar`
 - Windows 安装器：PowerShell 5+ 或 PowerShell 7+
 - `claude` 仍然是 `launch`、`login` 和透传命令的运行时依赖
-- 如果本机缺少 `claude`，`sclaude` 会提供通过 `npm` 安装 `@anthropic-ai/claude-code` 的选项
+- 如果本机缺少 `claude`，`sclaude` 会提供通过 `npm` 把 `@anthropic-ai/claude-code` 安装到 `$SCLAUDE_HOME/runtime/claude-code` 的选项
 - `push` 和 `pull` 额外依赖 `git` 与 `SCLAUDE_POOL_KEY`
 
 源码构建：
@@ -249,6 +264,7 @@ sclaude upgrade [-f|--force]
 - 从 `lauzhihao/sclaude` 的 GitHub Releases 下载当前平台对应资产
 - 替换当前 `sclaude` 主二进制
 - 同时更新 `opus`、`sonnet`、`haiku` 这些 sidecar binary
+- 下载到的更新二进制会先暂存在 `$SCLAUDE_HOME/tmp`
 - `-f`、`--force` 会在当前版本已经是最新时仍然强制重装
 
 ## 透传行为
@@ -267,7 +283,8 @@ opus auth status
 
 ## 账号存储说明
 
-- 受管账号保存在 `sclaude` 的本地状态目录下
+- 受管账号保存在解析后的 `SCLAUDE_HOME` 下，默认是 `~/.sclaude`
 - 每个账号都会被保存成隔离的 Claude 配置目录
-- macOS 上会优先把 credential bundle 存进 Keychain
-- 其他平台上会回退到受管账号目录里的本地 bundle 文件
+- credential bundle 会以本地 bundle 文件形式保存在受管账号目录里
+- 临时登录配置、Git checkout、自更新暂存目录都位于 `$SCLAUDE_HOME/tmp`
+- `import-known` 和安装脚本的自动导入仍会读取 `$HOME` 或 `CLAUDE_CONFIG_DIR` 下已有 Claude profile，但它们只作为外部导入来源

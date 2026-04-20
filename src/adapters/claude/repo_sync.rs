@@ -32,6 +32,7 @@ const BUNDLE_ALGORITHM: &str = "xchacha20poly1305-sha256";
 impl ClaudeAdapter {
     pub fn push_account_pool(
         &self,
+        state_dir: &Path,
         state: &State,
         repo: &str,
         bundle_dir: Option<&str>,
@@ -50,7 +51,7 @@ impl ClaudeAdapter {
         validate_identity_file(identity_file)?;
         let bundle_dir = resolve_bundle_dir(bundle_dir)?;
         let bundle_key = resolve_bundle_key()?;
-        let checkout = clone_repo(&git_bin, repo, identity_file)?;
+        let checkout = clone_repo(&git_bin, state_dir, repo, identity_file)?;
         let bundle_root = checkout.checkout_dir.join(&bundle_dir);
         let bundle_path = bundle_root.join(BUNDLE_FILENAME);
         let bundle = build_repo_bundle(state)?;
@@ -106,7 +107,7 @@ impl ClaudeAdapter {
         validate_identity_file(identity_file)?;
         let bundle_dir = resolve_bundle_dir(bundle_dir)?;
         let bundle_key = resolve_bundle_key()?;
-        let checkout = clone_repo(&git_bin, repo, identity_file)?;
+        let checkout = clone_repo(&git_bin, state_dir, repo, identity_file)?;
         let bundle_root = checkout.checkout_dir.join(&bundle_dir);
         let bundle_path = bundle_root.join(BUNDLE_FILENAME);
 
@@ -255,15 +256,26 @@ fn collect_profile_files_recursive(
         let path = entry.path();
         if path.is_dir() {
             // 跳过 Claude Code 运行时数据目录（不需要在 bundle 中同步）
-            let dir_name = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("");
-            if matches!(dir_name,
-                "file-history" | "projects" | "sessions" | "tasks" |
-                "plugins" | "remote" | "usage-data" | "backups" | "cache" |
-                "paste-cache" | "session-env" | "shell-snapshots" |
-                "telemetry" | "todos" | "plans" | "debug" | "statsig"
+            let dir_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if matches!(
+                dir_name,
+                "file-history"
+                    | "projects"
+                    | "sessions"
+                    | "tasks"
+                    | "plugins"
+                    | "remote"
+                    | "usage-data"
+                    | "backups"
+                    | "cache"
+                    | "paste-cache"
+                    | "session-env"
+                    | "shell-snapshots"
+                    | "telemetry"
+                    | "todos"
+                    | "plans"
+                    | "debug"
+                    | "statsig"
             ) {
                 continue;
             }
@@ -276,11 +288,19 @@ fn collect_profile_files_recursive(
         if path
             .file_name()
             .and_then(|name| name.to_str())
-            .is_some_and(|name| matches!(name,
-                ".credential-bundle.json" | ".credentials.json" |
-                "history.jsonl" | "stats-cache.json" | "mcp-needs-auth-cache.json" |
-                "settings.cp" | "settings.json.cp" | "settings.json.poe"
-            ))
+            .is_some_and(|name| {
+                matches!(
+                    name,
+                    ".credential-bundle.json"
+                        | ".credentials.json"
+                        | "history.jsonl"
+                        | "stats-cache.json"
+                        | "mcp-needs-auth-cache.json"
+                        | "settings.cp"
+                        | "settings.json.cp"
+                        | "settings.json.poe"
+                )
+            })
         {
             continue;
         }
@@ -526,8 +546,10 @@ struct RepoCheckout {
 }
 
 impl RepoCheckout {
-    fn new(prefix: &str) -> Result<Self> {
-        let checkout_dir = env::temp_dir().join(format!("{prefix}-{}", Uuid::new_v4()));
+    fn new(temp_root: &Path, prefix: &str) -> Result<Self> {
+        fs::create_dir_all(temp_root)
+            .with_context(|| format!("failed to create {}", temp_root.display()))?;
+        let checkout_dir = temp_root.join(format!("{prefix}-{}", Uuid::new_v4()));
         fs::create_dir_all(&checkout_dir)
             .with_context(|| format!("failed to create {}", checkout_dir.display()))?;
         Ok(Self { checkout_dir })
@@ -540,8 +562,14 @@ impl Drop for RepoCheckout {
     }
 }
 
-fn clone_repo(git_bin: &Path, repo: &str, identity_file: Option<&Path>) -> Result<RepoCheckout> {
-    let checkout = RepoCheckout::new("sclaude-git")?;
+fn clone_repo(
+    git_bin: &Path,
+    state_dir: &Path,
+    repo: &str,
+    identity_file: Option<&Path>,
+) -> Result<RepoCheckout> {
+    let temp_root = storage::tmp_dir(state_dir);
+    let checkout = RepoCheckout::new(&temp_root, "git")?;
     run_git(
         git_bin,
         checkout.checkout_dir.parent(),

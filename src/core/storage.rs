@@ -11,6 +11,9 @@ use crate::core::state::State;
 const DEFAULT_STATE_BASENAME: &str = "sclaude";
 const STATE_DIR_ENV: &str = "SCLAUDE_HOME";
 const REPO_SYNC_CONFIG_FILENAME: &str = "repo-sync.json";
+const BIN_DIR_NAME: &str = "bin";
+const RUNTIME_DIR_NAME: &str = "runtime";
+const TMP_DIR_NAME: &str = "tmp";
 
 pub fn resolve_state_dir(override_dir: Option<&Path>) -> Result<PathBuf> {
     if let Some(path) = override_dir {
@@ -22,6 +25,18 @@ pub fn resolve_state_dir(override_dir: Option<&Path>) -> Result<PathBuf> {
     }
 
     default_state_dir()
+}
+
+pub fn bin_dir(state_dir: &Path) -> PathBuf {
+    state_dir.join(BIN_DIR_NAME)
+}
+
+pub fn runtime_dir(state_dir: &Path) -> PathBuf {
+    state_dir.join(RUNTIME_DIR_NAME)
+}
+
+pub fn tmp_dir(state_dir: &Path) -> PathBuf {
+    state_dir.join(TMP_DIR_NAME)
 }
 
 fn configured_state_dir_from_env() -> Option<PathBuf> {
@@ -188,6 +203,15 @@ mod tests {
     fn default_state_dir_falls_back_to_data_directory_without_home() {
         let path = default_state_dir_for_home(None, Path::new("/tmp/data"));
         assert_eq!(path, Path::new("/tmp/data/sclaude"));
+    }
+
+    #[test]
+    fn managed_subdirectories_stay_under_state_dir() {
+        let state_dir = Path::new("/tmp/home/.sclaude");
+
+        assert_eq!(super::bin_dir(state_dir), state_dir.join("bin"));
+        assert_eq!(super::runtime_dir(state_dir), state_dir.join("runtime"));
+        assert_eq!(super::tmp_dir(state_dir), state_dir.join("tmp"));
     }
 
     #[test]

@@ -43,16 +43,28 @@ impl ClaudeAdapter {
     }
 
     pub(super) fn read_auth_status(&self, root: &Path) -> Result<AuthStatus> {
-        self.read_auth_status_inner(Some(root))
+        self.read_auth_status_inner(Some(root), None)
+    }
+
+    pub(super) fn read_auth_status_with_state(
+        &self,
+        root: &Path,
+        state_dir: &Path,
+    ) -> Result<AuthStatus> {
+        self.read_auth_status_inner(Some(root), Some(state_dir))
     }
 
     pub(super) fn read_default_auth_status(&self) -> Result<AuthStatus> {
-        self.read_auth_status_inner(None)
+        self.read_auth_status_inner(None, None)
     }
 
-    fn read_auth_status_inner(&self, root: Option<&Path>) -> Result<AuthStatus> {
+    fn read_auth_status_inner(
+        &self,
+        root: Option<&Path>,
+        state_dir: Option<&Path>,
+    ) -> Result<AuthStatus> {
         let claude_bin =
-            find_claude_bin().ok_or_else(|| anyhow::anyhow!("claude binary not found"))?;
+            find_claude_bin(state_dir).ok_or_else(|| anyhow::anyhow!("claude binary not found"))?;
         let mut command = Command::new(claude_bin);
         command.args(["auth", "status"]);
         if let Some(root) = root {

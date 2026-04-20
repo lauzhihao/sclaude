@@ -140,7 +140,7 @@ impl ClaudeAdapter {
                 return Ok(None);
             }
             let record = self.run_interactive_login(state_dir, state, None)?;
-            let usage = self.refresh_account_usage(state, &record);
+            let usage = self.refresh_account_usage(state_dir, state, &record);
             if perform_switch {
                 self.switch_account(&record)?;
                 state.current_account_id = Some(record.id.clone());
@@ -148,7 +148,7 @@ impl ClaudeAdapter {
             return Ok(Some((record, usage)));
         }
 
-        self.refresh_all_accounts(state);
+        self.refresh_all_accounts(state_dir, state);
 
         if let Some(current) = state
             .current_account_id
@@ -198,7 +198,7 @@ impl ClaudeAdapter {
         }
 
         let record = self.run_interactive_login(state_dir, state, None)?;
-        let usage = self.refresh_account_usage(state, &record);
+        let usage = self.refresh_account_usage(state_dir, state, &record);
         if perform_switch {
             self.switch_account(&record)?;
             state.current_account_id = Some(record.id.clone());
@@ -213,7 +213,7 @@ impl ClaudeAdapter {
         email_hint: Option<&str>,
     ) -> Result<AccountRecord> {
         let ui = core_ui::messages();
-        let claude_bin = self.resolve_claude_bin()?;
+        let claude_bin = self.resolve_claude_bin(state_dir)?;
         let temp_root = state_dir.join(".tmp");
         fs::create_dir_all(&temp_root)
             .with_context(|| format!("failed to create {}", temp_root.display()))?;
@@ -299,13 +299,14 @@ impl ClaudeAdapter {
 
     pub fn launch_claude(
         &self,
+        state_dir: &Path,
         account: &AccountRecord,
         extra_args: &[OsString],
         resume: bool,
     ) -> Result<i32> {
         let ui = core_ui::messages();
         self.switch_account(account)?;
-        let claude_bin = self.resolve_claude_bin()?;
+        let claude_bin = self.resolve_claude_bin(state_dir)?;
         let fresh_cmd = build_claude_launch_command(&claude_bin, extra_args, false);
         let profile_root = profile_root_for_account(account);
 
@@ -335,9 +336,14 @@ impl ClaudeAdapter {
         Ok(status.code().unwrap_or(1))
     }
 
-    pub fn run_passthrough(&self, account: &AccountRecord, extra_args: &[OsString]) -> Result<i32> {
+    pub fn run_passthrough(
+        &self,
+        state_dir: &Path,
+        account: &AccountRecord,
+        extra_args: &[OsString],
+    ) -> Result<i32> {
         self.switch_account(account)?;
-        let claude_bin = self.resolve_claude_bin()?;
+        let claude_bin = self.resolve_claude_bin(state_dir)?;
         let profile_root = profile_root_for_account(account);
         let command = build_passthrough_command(&claude_bin, extra_args);
         let status = Command::new(&command[0])
@@ -349,18 +355,18 @@ impl ClaudeAdapter {
         Ok(status.code().unwrap_or(1))
     }
 
-    pub fn resolve_claude_bin(&self) -> Result<PathBuf> {
-        if let Some(path) = find_claude_bin() {
+    pub fn resolve_claude_bin(&self, state_dir: &Path) -> Result<PathBuf> {
+        if let Some(path) = find_claude_bin(Some(state_dir)) {
             return Ok(path);
         }
 
-        self.offer_to_install_claude()?;
-        find_claude_bin()
+        self.offer_to_install_claude(state_dir)?;
+        find_claude_bin(Some(state_dir))
             .ok_or_else(|| anyhow::anyhow!(core_ui::messages().claude_install_still_missing()))
     }
 
-    fn offer_to_install_claude(&self) -> Result<()> {
-        let install = claude_install_command();
+    fn offer_to_install_claude(&self, state_dir: &Path) -> Result<()> {
+        let install = claude_install_command(state_dir);
         let install_line = install.display();
         let ui = core_ui::messages();
 

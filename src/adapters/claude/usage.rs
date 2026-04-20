@@ -8,9 +8,9 @@ use reqwest::header::{HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 #[cfg(target_os = "macos")]
-use sha2::Sha256;
-#[cfg(target_os = "macos")]
 use sha2::Digest;
+#[cfg(target_os = "macos")]
+use sha2::Sha256;
 
 use super::ClaudeAdapter;
 use super::paths::profile_root_for_account;
@@ -84,7 +84,8 @@ fn read_oauth_token(profile_root: &Path) -> Option<String> {
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(|| "claude-code-user".into());
 
-        if let Ok(payload) = security_framework::passwords::get_generic_password(&service, &account) {
+        if let Ok(payload) = security_framework::passwords::get_generic_password(&service, &account)
+        {
             if let Ok(json) = serde_json::from_slice::<Value>(&payload) {
                 if let Some(token) = json
                     .get("claudeAiOauth")
@@ -134,24 +135,25 @@ fn fetch_oauth_usage(token: &str) -> Result<OauthUsageResponse> {
 }
 
 impl ClaudeAdapter {
-    pub fn refresh_all_accounts(&self, state: &mut State) {
+    pub fn refresh_all_accounts(&self, state_dir: &Path, state: &mut State) {
         for account in state.accounts.clone() {
-            let usage = self.fetch_usage_for_account(&account);
+            let usage = self.fetch_usage_for_account(state_dir, &account);
             state.usage_cache.insert(account.id.clone(), usage);
         }
     }
 
     pub fn refresh_account_usage(
         &self,
+        state_dir: &Path,
         state: &mut State,
         account: &AccountRecord,
     ) -> UsageSnapshot {
-        let usage = self.fetch_usage_for_account(account);
+        let usage = self.fetch_usage_for_account(state_dir, account);
         state.usage_cache.insert(account.id.clone(), usage.clone());
         usage
     }
 
-    fn fetch_usage_for_account(&self, account: &AccountRecord) -> UsageSnapshot {
+    fn fetch_usage_for_account(&self, state_dir: &Path, account: &AccountRecord) -> UsageSnapshot {
         let synced_at = Some(super::now_ts());
         if let Err(error) = self.switch_account(account) {
             return UsageSnapshot {
@@ -173,7 +175,7 @@ impl ClaudeAdapter {
         }
 
         let profile_root = profile_root_for_account(account);
-        match self.read_auth_status(&profile_root) {
+        match self.read_auth_status_with_state(&profile_root, state_dir) {
             Ok(status) => {
                 let mut result = UsageSnapshot {
                     plan: status.subscription_type.or_else(|| account.plan.clone()),

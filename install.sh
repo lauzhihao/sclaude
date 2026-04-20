@@ -2,7 +2,10 @@
 set -euo pipefail
 
 REPO="${SCLAUDE_REPO:-lauzhihao/sclaude}"
-INSTALL_BIN="${INSTALL_BIN:-$HOME/.local/bin}"
+SCLAUDE_HOME="${SCLAUDE_HOME:-${HOME}/.sclaude}"
+export SCLAUDE_HOME
+INSTALL_BIN="${INSTALL_BIN:-${SCLAUDE_HOME}/bin}"
+TMP_ROOT="${SCLAUDE_HOME}/tmp"
 WRAPPER_PATH="${INSTALL_BIN}/sclaude"
 OPUS_PATH="${INSTALL_BIN}/opus"
 SONNET_PATH="${INSTALL_BIN}/sonnet"
@@ -81,7 +84,8 @@ download_and_install() {
   target="$2"
   asset="sclaude-${version}-${target}.tar.gz"
   url="https://github.com/${REPO}/releases/download/${version}/${asset}"
-  tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/sclaude-install.XXXXXX")"
+  mkdir -p "${TMP_ROOT}"
+  tmp_dir="$(mktemp -d "${TMP_ROOT}/install.XXXXXX")"
   cleanup_dir="${tmp_dir}"
   trap 'rm -rf -- "'"${cleanup_dir}"'"' EXIT
   archive_path="${tmp_dir}/${asset}"
@@ -107,6 +111,18 @@ install_original_wrapper() {
   cat > "${ORIGINAL_WRAPPER_PATH}" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+SCLAUDE_HOME="${SCLAUDE_HOME:-${HOME}/.sclaude}"
+if [[ -n "${CLAUDE_BIN:-}" && -x "${CLAUDE_BIN}" ]]; then
+  exec "${CLAUDE_BIN}" "$@"
+fi
+runtime_claude="${SCLAUDE_HOME}/runtime/claude-code/bin/claude"
+if [[ -x "${runtime_claude}" ]]; then
+  exec "${runtime_claude}" "$@"
+fi
+runtime_claude="${SCLAUDE_HOME}/runtime/claude-code/node_modules/.bin/claude"
+if [[ -x "${runtime_claude}" ]]; then
+  exec "${runtime_claude}" "$@"
+fi
 if command -v claude >/dev/null 2>&1; then
   exec "$(command -v claude)" "$@"
 fi
@@ -134,6 +150,7 @@ post_install_import() {
 }
 
 print_next_steps() {
+  echo "SCLAUDE_HOME is ${SCLAUDE_HOME}"
   echo "Installed to ${WRAPPER_PATH}"
   echo "Installed model entrypoints to ${OPUS_PATH}, ${SONNET_PATH}, ${HAIKU_PATH}"
   echo "Installed passthrough helper to ${ORIGINAL_WRAPPER_PATH}"

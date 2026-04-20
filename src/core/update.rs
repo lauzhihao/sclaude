@@ -12,6 +12,8 @@ use tar::Archive;
 use uuid::Uuid;
 use zip::ZipArchive;
 
+use crate::core::storage;
+
 const DEFAULT_REPO: &str = "lauzhihao/sclaude";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,7 +49,7 @@ struct GithubRelease {
     tag_name: String,
 }
 
-pub fn self_update(force: bool) -> Result<UpdateOutcome> {
+pub fn self_update(state_dir: &Path, force: bool) -> Result<UpdateOutcome> {
     let executable_path =
         env::current_exe().context("failed to resolve current executable path")?;
     let previous_version = env!("CARGO_PKG_VERSION").to_string();
@@ -63,7 +65,10 @@ pub fn self_update(force: bool) -> Result<UpdateOutcome> {
     }
 
     let binary = download_release_binary(&asset)?;
-    let temp_dir = env::temp_dir().join(format!("sclaude-update-{}", Uuid::new_v4()));
+    let temp_root = storage::tmp_dir(state_dir);
+    fs::create_dir_all(&temp_root)
+        .with_context(|| format!("failed to create {}", temp_root.display()))?;
+    let temp_dir = temp_root.join(format!("update-{}", Uuid::new_v4()));
     fs::create_dir_all(&temp_dir)
         .with_context(|| format!("failed to create {}", temp_dir.display()))?;
     let temp_binary = temp_dir.join(binary_filename_for_current_platform());

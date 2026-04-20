@@ -31,17 +31,32 @@ Current published release targets:
 The installer:
 
 - downloads the latest published `sclaude` release asset
-- installs `sclaude` as the primary command
-- installs `opus`, `sonnet`, and `haiku` as model entrypoints
-- installs `sclaude-original` as a thin passthrough helper to the underlying `claude`
+- uses `SCLAUDE_HOME`, defaulting to `~/.sclaude`
+- installs `sclaude` as the primary command under `$SCLAUDE_HOME/bin`
+- installs `opus`, `sonnet`, and `haiku` as model entrypoints under `$SCLAUDE_HOME/bin`
+- installs `sclaude-original` as a thin passthrough helper to the underlying `claude` under `$SCLAUDE_HOME/bin`
 - imports the current Claude profile when it finds `~/.claude.json`, `~/.config.json`, `~/.claude/.claude.json`, or `~/.claude/.config.json`
+
+Override `SCLAUDE_HOME` to move the full managed home. Override `INSTALL_BIN` only when you intentionally want the entrypoint binaries outside `$SCLAUDE_HOME/bin`.
+
+Default managed layout:
+
+```text
+~/.sclaude/
+  bin/
+  runtime/
+  tmp/
+  accounts/
+  state.json
+  repo-sync.json
+```
 
 ## Requirements
 
 - Unix installer: `bash`, `curl`, `tar`
 - Windows installer: PowerShell 5+ or PowerShell 7+
 - `claude` is still required at runtime for `launch`, `login`, and passthrough commands
-- if `claude` is missing, `sclaude` offers to install `@anthropic-ai/claude-code` through `npm`
+- if `claude` is missing, `sclaude` offers to install `@anthropic-ai/claude-code` through `npm` into `$SCLAUDE_HOME/runtime/claude-code`
 - `push` and `pull` additionally require `git` plus `SCLAUDE_POOL_KEY`
 
 Build from source:
@@ -249,6 +264,7 @@ sclaude upgrade [-f|--force]
 - downloads the latest matching GitHub Releases asset from `lauzhihao/sclaude`
 - replaces the current `sclaude` executable
 - also updates sidecar binaries such as `opus`, `sonnet`, and `haiku`
+- stages downloaded update binaries under `$SCLAUDE_HOME/tmp`
 - `-f`, `--force` reinstalls even if the current version already matches the latest release
 
 ## Passthrough Behavior
@@ -267,7 +283,8 @@ That is why `opus auth status` works even though `auth` is not a declared `sclau
 
 ## Account Storage Notes
 
-- managed accounts live under the resolved `sclaude` state directory
+- managed accounts live under the resolved `SCLAUDE_HOME` directory, defaulting to `~/.sclaude`
 - imported profiles are stored as isolated managed Claude homes
-- on macOS, credential bundles are stored in Keychain when possible
-- on other platforms, credential bundles fall back to local bundle files inside the managed account home
+- credential bundles are stored as local bundle files inside the managed account home
+- temporary login profiles, Git checkouts, and update staging live under `$SCLAUDE_HOME/tmp`
+- `import-known` and installer auto-import still read existing Claude profiles under `$HOME` or `CLAUDE_CONFIG_DIR` only as external import sources
