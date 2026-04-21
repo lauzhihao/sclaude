@@ -416,7 +416,6 @@ fn overwrite_local_account_pool(state_dir: &Path, bundle: &RepoBundle) -> Result
                 .with_context(|| format!("failed to write {}", target.display()))?;
         }
 
-        let auth_path = managed_auth_file(&staged_home);
         let credential_bundle_key = account
             .credential_bundle_key
             .clone()
@@ -430,6 +429,9 @@ fn overwrite_local_account_pool(state_dir: &Path, bundle: &RepoBundle) -> Result
             save_credential_bundle(&staged_home, &credential_bundle_key, &bundle)?;
             restore_credential_bundle(&staged_home, &bundle)?;
         }
+        // 使用最终位置（rename 之后）而非临时位置来设置 auth_path 和 config_path
+        let final_account_home = accounts_root.join(&account.id);
+        let auth_path = managed_auth_file(&final_account_home);
         state.accounts.push(AccountRecord {
             id: account.id.clone(),
             email: account.email.clone(),
@@ -439,7 +441,7 @@ fn overwrite_local_account_pool(state_dir: &Path, bundle: &RepoBundle) -> Result
             identity_fingerprint: account.identity_fingerprint.clone(),
             plan: account.plan.clone(),
             auth_path: auth_path.to_string_lossy().into_owned(),
-            config_path: Some(staged_home.to_string_lossy().into_owned()),
+            config_path: Some(final_account_home.to_string_lossy().into_owned()),
             credential_bundle_key: Some(credential_bundle_key),
             added_at: account.added_at,
             updated_at: account.updated_at,
