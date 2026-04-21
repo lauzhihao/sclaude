@@ -1,6 +1,6 @@
 [package]
 name = "sclaude"
-version = "0.1.0"
+version = "0.1.15"
 edition = "2024"
 autobins = false
 rust-version = "1.85"
