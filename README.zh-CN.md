@@ -111,7 +111,8 @@ sclaude login --oauth --username you@example.com
 实际行为：
 
 - 在临时受管目录里执行 `claude auth login --claudeai`
-- OAuth 登录完成后，会继续执行 `claude setup-token`；请把终端输出的 `sk-ant-oat...` token 粘贴回 `sclaude`
+- OAuth 登录完成后，会在 PTY 里继续执行 `claude setup-token`，并优先自动提取终端输出里的 `sk-ant-oat...` token
+- 如果自动提取失败，`sclaude` 才会回退为手动粘贴 token
 - 本地会记录 OAuth token 和创建时间，后续启动时通过 `CLAUDE_CODE_OAUTH_TOKEN` 注入
 - `--username` 只作为传给 Claude 的邮箱提示
 - `--password` 仅为兼容保留，当前不会被使用
@@ -195,7 +196,8 @@ sclaude list
 ```
 
 - 会先刷新所有已知账号
-- 然后输出包含账号标识、plan、额度、重置时间和状态的表格
+- 即使当前 0 个账号可用，也仍然会输出包含账号标识、plan、额度、重置时间和状态的完整表格
+- OAuth usage 会优先从受管 Claude profile 里的短期 access token 刷新；如果只是临时拉取失败，额度字段可能显示为 `N/A`
 
 ### `refresh`
 
@@ -205,6 +207,7 @@ sclaude refresh
 
 - 刷新所有已知账号
 - 打印刷新数量和最新账号表格
+- 和 `list` 一样，即使当前没有可用账号，也会继续输出最新账号表格
 
 ### `import-auth`
 
@@ -214,6 +217,7 @@ sclaude import-auth <path>
 
 - `<path>` 可以是 Claude 认证文件，也可以是包含认证文件的目录
 - 导入后会复制到 `sclaude` 自己的受管状态目录里
+- 该 profile 必须真的包含账号凭据，目前要求至少有 `userID` 或 `ANTHROPIC_API_KEY`；只有普通 settings 的文件会被拒绝
 
 ### `import-known`
 
@@ -227,6 +231,7 @@ sclaude import-known
   - `~/.config.json`
   - `~/.claude/`
 - 如果 `claude auth status` 可用，会优先用它识别身份；失败时再回退到本地认证文件解析
+- 和 `import-auth` 一样，只会导入真正带账号凭据的 profile；纯 settings 文件会被忽略
 
 ### `push`
 

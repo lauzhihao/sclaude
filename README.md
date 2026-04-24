@@ -111,7 +111,8 @@ sclaude login --oauth --username you@example.com
 Actual behavior:
 
 - runs `claude auth login --claudeai` in a temporary managed profile
-- after OAuth login, runs `claude setup-token`; paste the printed `sk-ant-oat...` token back into `sclaude`
+- after OAuth login, runs `claude setup-token` in a PTY and tries to extract the printed `sk-ant-oat...` token automatically
+- if automatic extraction fails, `sclaude` falls back to prompting you to paste the token manually
 - stores the OAuth token and its creation time in local state so launches can use `CLAUDE_CODE_OAUTH_TOKEN`
 - `--username` is only an email hint passed to Claude
 - `--password` is kept only for compatibility and is currently ignored
@@ -195,7 +196,8 @@ sclaude list
 ```
 
 - refreshes all known accounts first
-- renders a table with account label, plan, quota columns, reset time, and status
+- always renders the account table with account label, plan, quota columns, reset time, and status, even when zero accounts are currently usable
+- OAuth usage is refreshed from the managed Claude profile's short-lived access token when available; quota fields may stay `N/A` on temporary fetch failures
 
 ### `refresh`
 
@@ -205,6 +207,7 @@ sclaude refresh
 
 - refreshes all known accounts
 - prints a refreshed-count message and the latest account table
+- like `list`, it keeps rendering the latest account table even when no account is currently usable
 
 ### `import-auth`
 
@@ -214,6 +217,7 @@ sclaude import-auth <path>
 
 - `<path>` can be a Claude auth file or a parent directory containing one
 - imported profiles are copied into `sclaude` state storage as managed accounts
+- the profile must contain actual account credentials, currently either `userID` or `ANTHROPIC_API_KEY`; plain settings-only files are rejected
 
 ### `import-known`
 
@@ -227,6 +231,7 @@ sclaude import-known
   - `~/.config.json`
   - `~/.claude/`
 - prefers `claude auth status` when available, and falls back to local auth-file parsing
+- like `import-auth`, only profiles with actual account credentials are imported; plain settings-only files are ignored
 
 ### `push`
 
