@@ -101,6 +101,10 @@ impl ClaudeAdapter {
 }
 
 pub(super) fn decode_identity(auth: &Value) -> Result<LiveIdentityWithPlan> {
+    if !has_auth_identity(auth) {
+        anyhow::bail!("Claude profile does not contain account credentials");
+    }
+
     let account_id = auth
         .get("userID")
         .and_then(Value::as_str)
@@ -120,6 +124,16 @@ pub(super) fn decode_identity(auth: &Value) -> Result<LiveIdentityWithPlan> {
         identity_fingerprint,
         plan: None,
     })
+}
+
+fn has_auth_identity(auth: &Value) -> bool {
+    auth.get("ANTHROPIC_API_KEY")
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.trim().is_empty())
+        || auth
+            .get("userID")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.trim().is_empty())
 }
 
 fn identity_display_name(auth: &Value) -> String {
@@ -335,5 +349,29 @@ mod tests {
         assert_eq!(identity.email, "user-1234567890ab@www.code-cli.cn");
         assert_eq!(identity.account_id.as_deref(), Some("1234567890abcdef"));
         Ok(())
+    }
+
+    #[test]
+    fn decode_identity_accepts_api_key_profiles() -> Result<()> {
+        let auth = serde_json::json!({
+            "ANTHROPIC_API_KEY": "sk-ant-api03-example",
+            "ANTHROPIC_BASE_URL": "https://api.example.com"
+        });
+
+        let identity = decode_identity(&auth)?;
+
+        assert_eq!(identity.email, "key-sk-ant-api03@api.example.com");
+        assert_eq!(identity.account_kind.as_deref(), Some("api"));
+        Ok(())
+    }
+
+    #[test]
+    fn decode_identity_rejects_plain_settings_without_credentials() {
+        let auth = serde_json::json!({
+            "hasCompletedOnboarding": true,
+            "autoUpdates": true
+        });
+
+        assert!(decode_identity(&auth).is_err());
     }
 }

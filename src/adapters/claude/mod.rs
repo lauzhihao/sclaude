@@ -1,12 +1,13 @@
 use std::env;
 use std::ffi::OsString;
 use std::fs;
-use std::io::{self, IsTerminal, Write};
+use std::io::{self, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
+use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -309,27 +310,12 @@ impl ClaudeAdapter {
         let profile_root = profile_root_for_account(record);
 
         println!("{}", ui.setup_token_start());
-        let status = Command::new(&claude_bin)
-            .arg("setup-token")
-            .env("CLAUDE_CONFIG_DIR", &profile_root)
-            .status()
-            .with_context(|| format!("failed to execute {}", claude_bin.display()))?;
-        if !status.success() {
-            bail!("{}", ui.setup_token_failed(status.code().unwrap_or(1)));
-        }
+        let token = match run_setup_token_with_pty(&claude_bin, &profile_root)? {
+            Some(token) => token,
+            None => read_setup_token_from_stdin()?,
+        };
 
-        print!("{}", ui.setup_token_prompt());
-        io::stdout().flush().context("failed to flush stdout")?;
-        let mut line = String::new();
-        io::stdin()
-            .read_line(&mut line)
-            .context("failed to read OAuth token")?;
-        let token = line.trim();
-        if !token.starts_with("sk-ant-oat") {
-            bail!("{}", ui.setup_token_required());
-        }
-
-        record.oauth_token = Some(token.to_string());
+        record.oauth_token = Some(token);
         record.oauth_token_created_at = Some(now_ts());
         ensure_oauth_token_profile(&profile_root)?;
         if let Some(stored) = state
@@ -465,6 +451,111 @@ impl ClaudeAdapter {
                 None => eprintln!("{}", ui.invalid_yes_no()),
             }
         }
+    }
+}
+
+fn run_setup_token_with_pty(claude_bin: &Path, profile_root: &Path) -> Result<Option<String>> {
+    let ui = core_ui::messages();
+    let pty_system = native_pty_system();
+    let pair = pty_system
+        .openpty(default_pty_size())
+        .context("failed to open PTY for claude setup-token")?;
+    let mut command = CommandBuilder::new(claude_bin.as_os_str());
+    command.arg("setup-token");
+    command.env("CLAUDE_CONFIG_DIR", profile_root.as_os_str());
+
+    let mut child = pair
+        .slave
+        .spawn_command(command)
+        .with_context(|| format!("failed to execute {}", claude_bin.display()))?;
+    drop(pair.slave);
+
+    let mut reader = pair
+        .master
+        .try_clone_reader()
+        .context("failed to read claude setup-token PTY")?;
+    let mut stdout = io::stdout();
+    let mut buffer = [0u8; 4096];
+    let mut captured = String::new();
+    let mut token = None;
+
+    loop {
+        match reader.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(n) => {
+                stdout
+                    .write_all(&buffer[..n])
+                    .context("failed to forward claude setup-token output")?;
+                stdout
+                    .flush()
+                    .context("failed to flush claude setup-token output")?;
+                let chunk = String::from_utf8_lossy(&buffer[..n]);
+                captured.push_str(&chunk);
+                if token.is_none() {
+                    token = extract_setup_token(&captured);
+                }
+            }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error).context("failed to read claude setup-token output"),
+        }
+    }
+
+    let status = child
+        .wait()
+        .context("failed to wait for claude setup-token")?;
+    if !status.success() {
+        bail!("{}", ui.setup_token_failed(status.exit_code() as i32));
+    }
+
+    Ok(token)
+}
+
+fn read_setup_token_from_stdin() -> Result<String> {
+    let ui = core_ui::messages();
+    print!("{}", ui.setup_token_prompt());
+    io::stdout().flush().context("failed to flush stdout")?;
+    let mut line = String::new();
+    io::stdin()
+        .read_line(&mut line)
+        .context("failed to read OAuth token")?;
+    let token = line.trim();
+    if !is_valid_setup_token(token) {
+        bail!("{}", ui.setup_token_required());
+    }
+    Ok(token.to_string())
+}
+
+fn extract_setup_token(output: &str) -> Option<String> {
+    let start = output.find("sk-ant-oat")?;
+    let token = output[start..]
+        .chars()
+        .take_while(|ch| ch.is_ascii_graphic())
+        .collect::<String>()
+        .trim_end_matches(|ch: char| matches!(ch, '.' | ',' | ';' | ':' | ')' | ']' | '}'))
+        .to_string();
+    if is_valid_setup_token(&token) {
+        Some(token)
+    } else {
+        None
+    }
+}
+
+fn is_valid_setup_token(token: &str) -> bool {
+    token.starts_with("sk-ant-oat") && token.len() >= 24 && !token.contains("...")
+}
+
+fn default_pty_size() -> PtySize {
+    PtySize {
+        rows: env::var("LINES")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(24),
+        cols: env::var("COLUMNS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(80),
+        pixel_width: 0,
+        pixel_height: 0,
     }
 }
 
@@ -647,7 +738,8 @@ mod tests {
     use std::process::Command;
 
     use super::{
-        apply_claude_runtime_env, build_claude_launch_command, contains_resume_flag, parse_yes_no,
+        apply_claude_runtime_env, build_claude_launch_command, contains_resume_flag,
+        extract_setup_token, parse_yes_no,
     };
     use crate::core::state::AccountRecord;
 
@@ -711,6 +803,25 @@ mod tests {
         assert_eq!(
             envs.get("CLAUDE_CONFIG_DIR").and_then(Option::as_ref),
             Some(&expected_profile)
+        );
+    }
+
+    #[test]
+    fn setup_token_extraction_reads_real_token_from_tui_output() {
+        let output = "\u{1b}[32mAuthentication token created successfully!\u{1b}[0m\r\n\
+            sk-ant-oat-real-token-abcdef123456\r\n";
+
+        assert_eq!(
+            extract_setup_token(output).as_deref(),
+            Some("sk-ant-oat-real-token-abcdef123456")
+        );
+    }
+
+    #[test]
+    fn setup_token_extraction_ignores_placeholder() {
+        assert_eq!(
+            extract_setup_token("Copy the sk-ant-oat... token from Claude"),
+            None
         );
     }
 }

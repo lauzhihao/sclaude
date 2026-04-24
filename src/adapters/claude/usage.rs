@@ -174,22 +174,7 @@ impl ClaudeAdapter {
             };
         }
 
-        if let Some(token) = account_oauth_token(account) {
-            let mut result = UsageSnapshot {
-                plan: account.plan.clone(),
-                last_synced_at: synced_at,
-                ..UsageSnapshot::default()
-            };
-            match fetch_oauth_usage(token) {
-                Ok(usage) => apply_oauth_usage(&mut result, usage),
-                Err(error) => {
-                    result.last_sync_error = Some(error.to_string());
-                    result.needs_relogin = true;
-                }
-            }
-            return result;
-        }
-
+        let has_runtime_oauth_token = account_has_runtime_oauth_token(account);
         let profile_root = profile_root_for_account(account);
         match self.read_auth_status_with_state(&profile_root, state_dir) {
             Ok(status) => {
@@ -199,18 +184,17 @@ impl ClaudeAdapter {
                     ..UsageSnapshot::default()
                 };
 
-                // 尝试获取实时 OAuth usage 配额信息
-                if let Some(token) = read_oauth_token(&profile_root) {
-                    match fetch_oauth_usage(&token) {
-                        Ok(usage) => apply_oauth_usage(&mut result, usage),
-                        Err(_) => {
-                            // 配额接口失败（网络错误、429 频率限制等）属于暂时性问题，
-                            // 不污染 last_sync_error，避免账号被错误标记为不可用。
-                            // 配额字段保持 None，显示为 N/A。
-                        }
-                    }
-                }
+                apply_profile_oauth_usage(&profile_root, &mut result);
 
+                result
+            }
+            Err(_) if has_runtime_oauth_token => {
+                let mut result = UsageSnapshot {
+                    plan: account.plan.clone(),
+                    last_synced_at: synced_at,
+                    ..UsageSnapshot::default()
+                };
+                apply_profile_oauth_usage(&profile_root, &mut result);
                 result
             }
             Err(_) if self.profile_uses_api_key(account) => UsageSnapshot {
@@ -240,12 +224,22 @@ impl ClaudeAdapter {
     }
 }
 
-fn account_oauth_token(account: &AccountRecord) -> Option<&str> {
+fn account_has_runtime_oauth_token(account: &AccountRecord) -> bool {
     account
         .oauth_token
         .as_deref()
         .map(str::trim)
-        .filter(|value| !value.is_empty())
+        .is_some_and(|value| !value.is_empty())
+}
+
+fn apply_profile_oauth_usage(profile_root: &Path, result: &mut UsageSnapshot) {
+    // usage endpoint 使用 Claude Code profile 中的短期 access token；
+    // setup-token 的长效 token 只用于 runtime 环境变量。
+    if let Some(token) = read_oauth_token(profile_root)
+        && let Ok(usage) = fetch_oauth_usage(&token)
+    {
+        apply_oauth_usage(result, usage);
+    }
 }
 
 fn apply_oauth_usage(result: &mut UsageSnapshot, usage: OauthUsageResponse) {
@@ -261,7 +255,9 @@ fn apply_oauth_usage(result: &mut UsageSnapshot, usage: OauthUsageResponse) {
 
 #[cfg(test)]
 mod tests {
-    use super::{AccountFlavor, account_flavor};
+    use std::fs;
+
+    use super::{AccountFlavor, account_flavor, read_oauth_token};
     use crate::core::state::AccountRecord;
 
     #[test]
@@ -288,5 +284,35 @@ mod tests {
         };
 
         assert_eq!(account_flavor(&legacy_api), AccountFlavor::ThirdPartyApi);
+    }
+
+    #[test]
+    fn usage_token_source_reads_profile_credentials() {
+        let profile_root =
+            std::env::temp_dir().join(format!("sclaude-usage-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&profile_root).expect("create profile root");
+        fs::write(
+            profile_root.join(".credentials.json"),
+            r#"{"claudeAiOauth":{"accessToken":"sk-ant-oat01-usage-token"}}"#,
+        )
+        .expect("write credentials");
+
+        assert_eq!(
+            read_oauth_token(&profile_root).as_deref(),
+            Some("sk-ant-oat01-usage-token")
+        );
+
+        let _ = fs::remove_dir_all(profile_root);
+    }
+
+    #[test]
+    fn usage_token_source_ignores_missing_profile_credentials() {
+        let profile_root =
+            std::env::temp_dir().join(format!("sclaude-usage-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&profile_root).expect("create profile root");
+
+        assert_eq!(read_oauth_token(&profile_root), None);
+
+        let _ = fs::remove_dir_all(profile_root);
     }
 }

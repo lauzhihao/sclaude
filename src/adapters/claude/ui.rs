@@ -51,18 +51,14 @@ impl ClaudeAdapter {
             })
             .collect::<Vec<_>>();
 
-        if usable_count == 0 {
-            ui.no_usable_account_hint().to_string()
-        } else {
-            render_table(
-                &ui.table_headers(),
-                &rows,
-                &[
-                    "center", "left", "center", "center", "center", "center", "center", "center",
-                ],
-                Some(ui.usable_account_summary(usable_count)),
-            )
-        }
+        render_table(
+            &ui.table_headers(),
+            &rows,
+            &[
+                "center", "left", "center", "center", "center", "center", "center", "center",
+            ],
+            Some(ui.usable_account_summary(usable_count)),
+        )
     }
 }
 
@@ -336,7 +332,7 @@ mod tests {
     }
 
     #[test]
-    fn render_account_table_returns_empty_state_message_when_no_account_is_usable() {
+    fn render_account_table_still_shows_accounts_when_no_account_is_usable() {
         let adapter = ClaudeAdapter;
         let mut state = State::default();
         state.accounts.push(AccountRecord {
@@ -357,10 +353,10 @@ mod tests {
         );
 
         let rendered = adapter.render_account_table(&state, None);
-        assert_eq!(
-            rendered,
-            crate::core::ui::messages().no_usable_account_hint()
-        );
+        assert!(rendered.contains("a@example.com"));
+        assert!(rendered.contains("sk...abcdef"));
+        assert!(rendered.contains("19710101"));
+        assert!(rendered.contains(&crate::core::ui::messages().usable_account_summary(0)));
     }
 
     #[test]
