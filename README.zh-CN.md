@@ -111,6 +111,8 @@ sclaude login --oauth --username you@example.com
 实际行为：
 
 - 在临时受管目录里执行 `claude auth login --claudeai`
+- OAuth 登录完成后，会继续执行 `claude setup-token`；请把终端输出的 `sk-ant-oat...` token 粘贴回 `sclaude`
+- 本地会记录 OAuth token 和创建时间，后续启动时通过 `CLAUDE_CODE_OAUTH_TOKEN` 注入
 - `--username` 只作为传给 Claude 的邮箱提示
 - `--password` 仅为兼容保留，当前不会被使用
 - 登录成功后，`sclaude login` 总是会切换到新导入的账号
@@ -142,6 +144,7 @@ sclaude add --api --provider poe.com --ANTHROPIC_BASE_URL ... --ANTHROPIC_API_KE
 
 - 使用和 `sclaude login` 完全相同的登录参数与流程
 - 与 `login` 的区别只在于：`add` 只有在传入 `--switch` 时才会切换到新账号
+- OAuth `add` 同样会执行 `claude setup-token` 并保存粘贴的 token
 
 ## 命令细节
 
@@ -233,7 +236,7 @@ sclaude push [-i <identity_file>] [--path <repo_path>] [repo]
 ```
 
 - 使用你现有的 Git 凭据克隆仓库
-- 把完整本地账号池导出成加密 bundle
+- 把账号 metadata 和已保存的 OAuth token 导出成加密 bundle
 - 默认写到 `.sclaude-account-pool/bundle.enc.json`
 - 只有加密后的 bundle 发生变化时才会提交并推送
 - 首次显式传入 `[repo]` 后，`sclaude` 会把它记到 `$SCLAUDE_HOME/repo-sync.json`
@@ -251,6 +254,7 @@ sclaude pull [-i <identity_file>] [--path <repo_path>] [repo]
 - 使用你现有的 Git 凭据克隆仓库
 - 解密远端账号池 bundle
 - 直接覆盖本地受管账号池，不做 merge
+- token-only 账号会恢复成最小本地 Claude profile，启动时通过 `CLAUDE_CODE_OAUTH_TOKEN` 注入
 - 未传 `[repo]` 时，`sclaude` 会优先读取 `SCLAUDE_POOL_REPO`，再回退到 `$SCLAUDE_HOME` 中保存的仓库地址
 - 导入后会立刻刷新账号状态，并打印最新表格
 
@@ -286,5 +290,6 @@ opus auth status
 - 受管账号保存在解析后的 `SCLAUDE_HOME` 下，默认是 `~/.sclaude`
 - 每个账号都会被保存成隔离的 Claude 配置目录
 - credential bundle 会以本地 bundle 文件形式保存在受管账号目录里
+- OAuth token 会保存在本地 state 中，`list` 会显示为 `sk...<后6位> <YYYYmmdd过期日>`
 - 临时登录配置、Git checkout、自更新暂存目录都位于 `$SCLAUDE_HOME/tmp`
 - `import-known` 和安装脚本的自动导入仍会读取 `$HOME` 或 `CLAUDE_CONFIG_DIR` 下已有 Claude profile，但它们只作为外部导入来源

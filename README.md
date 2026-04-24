@@ -111,6 +111,8 @@ sclaude login --oauth --username you@example.com
 Actual behavior:
 
 - runs `claude auth login --claudeai` in a temporary managed profile
+- after OAuth login, runs `claude setup-token`; paste the printed `sk-ant-oat...` token back into `sclaude`
+- stores the OAuth token and its creation time in local state so launches can use `CLAUDE_CODE_OAUTH_TOKEN`
 - `--username` is only an email hint passed to Claude
 - `--password` is kept only for compatibility and is currently ignored
 - after a successful login, `sclaude login` always switches to the imported account
@@ -142,6 +144,7 @@ Actual behavior:
 
 - uses the same login flow and options as `sclaude login`
 - unlike `login`, it switches to the new account only when `--switch` is passed
+- OAuth `add` also runs `claude setup-token` and stores the pasted token
 
 ## Command Details
 
@@ -233,7 +236,7 @@ sclaude push [-i <identity_file>] [--path <repo_path>] [repo]
 ```
 
 - clones the repository with your existing Git credentials
-- exports the full local account pool as an encrypted bundle
+- exports account metadata and stored OAuth tokens as an encrypted bundle
 - stores the bundle under `.sclaude-account-pool/bundle.enc.json` by default
 - only pushes when the encrypted bundle changed
 - when `[repo]` is explicitly provided once, `sclaude` remembers it under `$SCLAUDE_HOME/repo-sync.json`
@@ -251,6 +254,7 @@ sclaude pull [-i <identity_file>] [--path <repo_path>] [repo]
 - clones the repository with your existing Git credentials
 - decrypts the remote account pool bundle
 - force-overwrites the local managed account pool instead of merging
+- token-only accounts are restored as minimal local Claude profiles and launched with `CLAUDE_CODE_OAUTH_TOKEN`
 - when `[repo]` is omitted, `sclaude` uses `SCLAUDE_POOL_REPO` first, then the saved repo from `$SCLAUDE_HOME`
 - refreshes account usage after import and prints the latest table
 
@@ -286,5 +290,6 @@ That is why `opus auth status` works even though `auth` is not a declared `sclau
 - managed accounts live under the resolved `SCLAUDE_HOME` directory, defaulting to `~/.sclaude`
 - imported profiles are stored as isolated managed Claude homes
 - credential bundles are stored as local bundle files inside the managed account home
+- OAuth tokens are stored in local state and shown in `list` as `sk...<last6> <YYYYmmdd-expiry>`
 - temporary login profiles, Git checkouts, and update staging live under `$SCLAUDE_HOME/tmp`
 - `import-known` and installer auto-import still read existing Claude profiles under `$HOME` or `CLAUDE_CONFIG_DIR` only as external import sources

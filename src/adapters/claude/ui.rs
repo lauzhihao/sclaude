@@ -6,7 +6,7 @@ use unicode_width::UnicodeWidthStr;
 
 use super::ClaudeAdapter;
 use super::usage::{AccountFlavor, account_flavor};
-use crate::core::state::{LiveIdentity, State, UsageSnapshot};
+use crate::core::state::{AccountRecord, LiveIdentity, State, UsageSnapshot};
 use crate::core::ui as core_ui;
 
 impl ClaudeAdapter {
@@ -42,6 +42,7 @@ impl ClaudeAdapter {
                     },
                     account.email.clone(),
                     format_account_type(account_flavor(account)),
+                    format_token_summary(account),
                     format_quota_percent(usage.five_hour_remaining_percent),
                     format_quota_percent(usage.weekly_remaining_percent),
                     format_reset_on(usage.weekly_refresh_at.as_deref()),
@@ -57,12 +58,40 @@ impl ClaudeAdapter {
                 &ui.table_headers(),
                 &rows,
                 &[
-                    "center", "left", "center", "center", "center", "center", "center",
+                    "center", "left", "center", "center", "center", "center", "center", "center",
                 ],
                 Some(ui.usable_account_summary(usable_count)),
             )
         }
     }
+}
+
+fn format_token_summary(account: &AccountRecord) -> String {
+    let ui = core_ui::messages();
+    let Some(token) = account
+        .oauth_token
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return ui.na().into();
+    };
+
+    let suffix = token
+        .chars()
+        .rev()
+        .take(6)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<String>();
+    let expires = account
+        .oauth_token_created_at
+        .and_then(|created_at| DateTime::<Utc>::from_timestamp(created_at + 365 * 24 * 60 * 60, 0))
+        .map(|expires_at| expires_at.format("%Y%m%d").to_string())
+        .unwrap_or_else(|| ui.na().into());
+
+    format!("sk...{suffix} {expires}")
 }
 
 fn format_account_type(flavor: AccountFlavor) -> String {
@@ -315,6 +344,8 @@ mod tests {
             email: "a@example.com".into(),
             account_kind: Some("oauth".into()),
             auth_path: "/tmp/auth.json".into(),
+            oauth_token: Some("sk-ant-oat-exampleabcdef".into()),
+            oauth_token_created_at: Some(0),
             ..Default::default()
         });
         state.usage_cache.insert(
@@ -341,6 +372,8 @@ mod tests {
             email: "a@example.com".into(),
             account_kind: Some("oauth".into()),
             auth_path: "/tmp/auth.json".into(),
+            oauth_token: Some("sk-ant-oat-exampleabcdef".into()),
+            oauth_token_created_at: Some(0),
             ..Default::default()
         });
         state.usage_cache.insert(
@@ -357,6 +390,8 @@ mod tests {
         let lines = rendered.lines().collect::<Vec<_>>();
         let summary = crate::core::ui::messages().usable_account_summary(1);
 
+        assert!(rendered.contains("sk...abcdef"));
+        assert!(rendered.contains("19710101"));
         // transition border before summary
         assert_eq!(lines[lines.len() - 3].chars().next(), Some('├'));
         // summary row

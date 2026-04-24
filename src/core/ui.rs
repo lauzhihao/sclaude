@@ -229,11 +229,22 @@ impl Messages {
         "N/A"
     }
 
-    pub fn table_headers(&self) -> [&'static str; 7] {
+    pub fn table_headers(&self) -> [&'static str; 8] {
         if self.is_zh() {
-            ["当前", "邮箱", "类型", "5h", "7d", "重置时间", "状态"]
+            [
+                "当前",
+                "邮箱",
+                "类型",
+                "Token",
+                "5h",
+                "7d",
+                "重置时间",
+                "状态",
+            ]
         } else {
-            ["Active", "Email", "Type", "5h", "7d", "ResetOn", "Status"]
+            [
+                "Active", "Email", "Type", "Token", "5h", "7d", "ResetOn", "Status",
+            ]
         }
     }
 
@@ -368,6 +379,46 @@ impl Messages {
             format!("claude 登录失败，退出码：{status}")
         } else {
             format!("claude auth login failed with status {status}")
+        }
+    }
+
+    pub fn setup_token_start(&self) -> &'static str {
+        if self.is_zh() {
+            "正在启动 `claude setup-token`。完成网页授权后，请复制终端中输出的 OAuth token。"
+        } else {
+            "Starting `claude setup-token`. After browser authorization, copy the OAuth token printed by Claude."
+        }
+    }
+
+    pub fn setup_token_prompt(&self) -> &'static str {
+        if self.is_zh() {
+            "请粘贴 OAuth token："
+        } else {
+            "Paste OAuth token: "
+        }
+    }
+
+    pub fn setup_token_required(&self) -> &'static str {
+        if self.is_zh() {
+            "OAuth token 不能为空，且必须以 sk-ant-oat 开头。"
+        } else {
+            "OAuth token is required and must start with sk-ant-oat."
+        }
+    }
+
+    pub fn setup_token_saved(&self) -> &'static str {
+        if self.is_zh() {
+            "已保存 OAuth token。"
+        } else {
+            "Saved OAuth token."
+        }
+    }
+
+    pub fn setup_token_failed(&self, status: i32) -> String {
+        if self.is_zh() {
+            format!("claude setup-token 失败，退出码：{status}")
+        } else {
+            format!("claude setup-token failed with status {status}")
         }
     }
 

@@ -28,6 +28,10 @@ pub struct AccountRecord {
     #[serde(default)]
     pub credential_bundle_key: Option<String>,
     #[serde(default)]
+    pub oauth_token: Option<String>,
+    #[serde(default)]
+    pub oauth_token_created_at: Option<i64>,
+    #[serde(default)]
     pub added_at: i64,
     #[serde(default)]
     pub updated_at: i64,

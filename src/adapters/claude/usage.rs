@@ -174,6 +174,22 @@ impl ClaudeAdapter {
             };
         }
 
+        if let Some(token) = account_oauth_token(account) {
+            let mut result = UsageSnapshot {
+                plan: account.plan.clone(),
+                last_synced_at: synced_at,
+                ..UsageSnapshot::default()
+            };
+            match fetch_oauth_usage(token) {
+                Ok(usage) => apply_oauth_usage(&mut result, usage),
+                Err(error) => {
+                    result.last_sync_error = Some(error.to_string());
+                    result.needs_relogin = true;
+                }
+            }
+            return result;
+        }
+
         let profile_root = profile_root_for_account(account);
         match self.read_auth_status_with_state(&profile_root, state_dir) {
             Ok(status) => {
@@ -186,20 +202,7 @@ impl ClaudeAdapter {
                 // 尝试获取实时 OAuth usage 配额信息
                 if let Some(token) = read_oauth_token(&profile_root) {
                     match fetch_oauth_usage(&token) {
-                        Ok(usage) => {
-                            // 处理 5 小时配额
-                            if let Some(slot) = usage.five_hour {
-                                result.five_hour_remaining_percent =
-                                    Some((100.0 - slot.utilization).round() as i64);
-                                result.five_hour_refresh_at = slot.resets_at;
-                            }
-                            // 处理 7 天配额
-                            if let Some(slot) = usage.seven_day {
-                                result.weekly_remaining_percent =
-                                    Some((100.0 - slot.utilization).round() as i64);
-                                result.weekly_refresh_at = slot.resets_at;
-                            }
-                        }
+                        Ok(usage) => apply_oauth_usage(&mut result, usage),
                         Err(_) => {
                             // 配额接口失败（网络错误、429 频率限制等）属于暂时性问题，
                             // 不污染 last_sync_error，避免账号被错误标记为不可用。
@@ -234,6 +237,25 @@ impl ClaudeAdapter {
                     .map(str::trim)
                     .is_some_and(|value| !value.is_empty())
             })
+    }
+}
+
+fn account_oauth_token(account: &AccountRecord) -> Option<&str> {
+    account
+        .oauth_token
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn apply_oauth_usage(result: &mut UsageSnapshot, usage: OauthUsageResponse) {
+    if let Some(slot) = usage.five_hour {
+        result.five_hour_remaining_percent = Some((100.0 - slot.utilization).round() as i64);
+        result.five_hour_refresh_at = slot.resets_at;
+    }
+    if let Some(slot) = usage.seven_day {
+        result.weekly_remaining_percent = Some((100.0 - slot.utilization).round() as i64);
+        result.weekly_refresh_at = slot.resets_at;
     }
 }
 

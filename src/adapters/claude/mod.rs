@@ -7,7 +7,7 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
-use serde_json::json;
+use serde_json::{Value, json};
 use uuid::Uuid;
 
 use self::auth::{
@@ -16,7 +16,7 @@ use self::auth::{
 };
 use self::paths::{
     claude_config_root, claude_install_command, default_claude_auth_file, find_claude_bin,
-    find_in_path, profile_root_for_account,
+    find_in_path, managed_auth_file, profile_root_for_account,
 };
 use crate::adapters::{AdapterCapabilities, CliAdapter};
 use crate::core::policy::choose_best_account;
@@ -239,8 +239,9 @@ impl ClaudeAdapter {
             bail!("{}", ui.claude_login_failed(status.code().unwrap_or(1)));
         }
 
-        let record = self.import_auth_path(state_dir, state, &tmp_home)?;
+        let mut record = self.import_auth_path(state_dir, state, &tmp_home)?;
         let _ = fs::remove_dir_all(&tmp_home);
+        self.collect_setup_token(state_dir, state, &mut record)?;
         Ok(record)
     }
 
@@ -297,6 +298,53 @@ impl ClaudeAdapter {
         Ok(record)
     }
 
+    fn collect_setup_token(
+        &self,
+        state_dir: &Path,
+        state: &mut State,
+        record: &mut AccountRecord,
+    ) -> Result<()> {
+        let ui = core_ui::messages();
+        let claude_bin = self.resolve_claude_bin(state_dir)?;
+        let profile_root = profile_root_for_account(record);
+
+        println!("{}", ui.setup_token_start());
+        let status = Command::new(&claude_bin)
+            .arg("setup-token")
+            .env("CLAUDE_CONFIG_DIR", &profile_root)
+            .status()
+            .with_context(|| format!("failed to execute {}", claude_bin.display()))?;
+        if !status.success() {
+            bail!("{}", ui.setup_token_failed(status.code().unwrap_or(1)));
+        }
+
+        print!("{}", ui.setup_token_prompt());
+        io::stdout().flush().context("failed to flush stdout")?;
+        let mut line = String::new();
+        io::stdin()
+            .read_line(&mut line)
+            .context("failed to read OAuth token")?;
+        let token = line.trim();
+        if !token.starts_with("sk-ant-oat") {
+            bail!("{}", ui.setup_token_required());
+        }
+
+        record.oauth_token = Some(token.to_string());
+        record.oauth_token_created_at = Some(now_ts());
+        ensure_oauth_token_profile(&profile_root)?;
+        if let Some(stored) = state
+            .accounts
+            .iter_mut()
+            .find(|account| account.id == record.id)
+        {
+            stored.oauth_token = record.oauth_token.clone();
+            stored.oauth_token_created_at = record.oauth_token_created_at;
+            *record = stored.clone();
+        }
+        println!("{}", ui.setup_token_saved());
+        Ok(())
+    }
+
     pub fn launch_claude(
         &self,
         state_dir: &Path,
@@ -313,10 +361,10 @@ impl ClaudeAdapter {
         if resume && !contains_resume_flag(extra_args) {
             let resume_cmd = build_claude_launch_command(&claude_bin, extra_args, true);
             println!("{}", ui.resume_session());
-            let status = Command::new(&resume_cmd[0])
-                .args(&resume_cmd[1..])
-                .env("CLAUDE_CONFIG_DIR", &profile_root)
-                .env("IS_SANDBOX", "1")
+            let mut command = Command::new(&resume_cmd[0]);
+            command.args(&resume_cmd[1..]);
+            apply_claude_runtime_env(&mut command, account, &profile_root);
+            let status = command
                 .status()
                 .context("failed to execute claude continue")?;
             if status.success() {
@@ -327,12 +375,10 @@ impl ClaudeAdapter {
             println!("{}", ui.fresh_session());
         }
 
-        let status = Command::new(&fresh_cmd[0])
-            .args(&fresh_cmd[1..])
-            .env("CLAUDE_CONFIG_DIR", &profile_root)
-            .env("IS_SANDBOX", "1")
-            .status()
-            .context("failed to execute claude")?;
+        let mut command = Command::new(&fresh_cmd[0]);
+        command.args(&fresh_cmd[1..]);
+        apply_claude_runtime_env(&mut command, account, &profile_root);
+        let status = command.status().context("failed to execute claude")?;
         Ok(status.code().unwrap_or(1))
     }
 
@@ -346,10 +392,10 @@ impl ClaudeAdapter {
         let claude_bin = self.resolve_claude_bin(state_dir)?;
         let profile_root = profile_root_for_account(account);
         let command = build_passthrough_command(&claude_bin, extra_args);
-        let status = Command::new(&command[0])
-            .args(&command[1..])
-            .env("CLAUDE_CONFIG_DIR", &profile_root)
-            .env("IS_SANDBOX", "1")
+        let mut process = Command::new(&command[0]);
+        process.args(&command[1..]);
+        apply_claude_runtime_env(&mut process, account, &profile_root);
+        let status = process
             .status()
             .with_context(|| format!("failed to execute {}", claude_bin.display()))?;
         Ok(status.code().unwrap_or(1))
@@ -420,6 +466,39 @@ impl ClaudeAdapter {
             }
         }
     }
+}
+
+fn apply_claude_runtime_env(command: &mut Command, account: &AccountRecord, profile_root: &Path) {
+    command
+        .env("CLAUDE_CONFIG_DIR", profile_root)
+        .env("IS_SANDBOX", "1");
+    if let Some(token) = account
+        .oauth_token
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        command.env("CLAUDE_CODE_OAUTH_TOKEN", token);
+    }
+}
+
+pub(super) fn ensure_oauth_token_profile(profile_root: &Path) -> Result<()> {
+    fs::create_dir_all(profile_root)
+        .with_context(|| format!("failed to create {}", profile_root.display()))?;
+    let auth_path = managed_auth_file(profile_root);
+    let mut auth = fs::read_to_string(&auth_path)
+        .ok()
+        .and_then(|contents| serde_json::from_str::<Value>(&contents).ok())
+        .filter(Value::is_object)
+        .unwrap_or_else(|| json!({}));
+
+    if let Some(object) = auth.as_object_mut() {
+        object.insert("hasCompletedOnboarding".into(), json!(true));
+    }
+
+    fs::write(&auth_path, serde_json::to_vec_pretty(&auth)?)
+        .with_context(|| format!("failed to write {}", auth_path.display()))?;
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -565,8 +644,12 @@ fn detect_local_ip() -> String {
 mod tests {
     use std::ffi::OsString;
     use std::path::Path;
+    use std::process::Command;
 
-    use super::{build_claude_launch_command, contains_resume_flag, parse_yes_no};
+    use super::{
+        apply_claude_runtime_env, build_claude_launch_command, contains_resume_flag, parse_yes_no,
+    };
+    use crate::core::state::AccountRecord;
 
     #[test]
     fn build_launch_command_adds_model_flags_when_missing() {
@@ -596,5 +679,38 @@ mod tests {
         assert!(contains_resume_flag(&[OsString::from("-c")]));
         assert!(contains_resume_flag(&[OsString::from("--resume")]));
         assert!(!contains_resume_flag(&[OsString::from("agents")]));
+    }
+
+    #[test]
+    fn runtime_env_includes_oauth_token_when_present() {
+        let account = AccountRecord {
+            oauth_token: Some("sk-ant-oat-exampleabcdef".into()),
+            ..Default::default()
+        };
+        let mut command = Command::new("claude");
+
+        apply_claude_runtime_env(&mut command, &account, Path::new("/tmp/profile"));
+
+        let envs = command
+            .get_envs()
+            .map(|(key, value)| {
+                (
+                    key.to_string_lossy().into_owned(),
+                    value.map(|item| item.to_string_lossy().into_owned()),
+                )
+            })
+            .collect::<std::collections::BTreeMap<_, _>>();
+        assert_eq!(
+            envs.get("CLAUDE_CODE_OAUTH_TOKEN").and_then(Option::as_ref),
+            Some(&"sk-ant-oat-exampleabcdef".to_string())
+        );
+        let expected_profile = Path::new("/tmp/profile")
+            .as_os_str()
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(
+            envs.get("CLAUDE_CONFIG_DIR").and_then(Option::as_ref),
+            Some(&expected_profile)
+        );
     }
 }

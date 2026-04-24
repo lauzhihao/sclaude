@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use uuid::Uuid;
 
-use super::ClaudeAdapter;
 use super::auth::LiveIdentityWithPlan;
 use super::credentials::{
     capture_credential_bundle, credential_bundle_key, credential_bundle_key_for_id,
@@ -16,6 +15,7 @@ use super::paths::{
     claude_config_root, default_claude_auth_file, find_claude_auth_file, managed_auth_file,
     profile_root_for_account,
 };
+use super::{ClaudeAdapter, ensure_oauth_token_profile};
 use crate::core::state::{AccountRecord, State};
 use crate::core::storage;
 
@@ -96,6 +96,11 @@ impl ClaudeAdapter {
             .as_ref()
             .and_then(|item| item.credential_bundle_key.clone())
             .unwrap_or_else(|| credential_bundle_key_for_id(&account_id));
+        let existing_oauth_token = existing.as_ref().and_then(|item| item.oauth_token.clone());
+        let existing_oauth_token_created_at = existing
+            .as_ref()
+            .and_then(|item| item.oauth_token_created_at);
+        let existing_added_at = existing.as_ref().map(|item| item.added_at);
         let account_home = state_dir.join("accounts").join(&account_id);
         stage_profile_copy(source_root, source_auth, &account_home)?;
         save_credential_bundle(&account_home, &bundle_key, &bundle)?;
@@ -115,7 +120,9 @@ impl ClaudeAdapter {
                 .into_owned(),
             config_path: Some(account_home.to_string_lossy().into_owned()),
             credential_bundle_key: Some(bundle_key),
-            added_at: existing.map(|item| item.added_at).unwrap_or(timestamp),
+            oauth_token: existing_oauth_token,
+            oauth_token_created_at: existing_oauth_token_created_at,
+            added_at: existing_added_at.unwrap_or(timestamp),
             updated_at: timestamp,
         };
 
@@ -172,6 +179,10 @@ impl ClaudeAdapter {
     }
 
     pub fn switch_account(&self, account: &AccountRecord) -> Result<()> {
+        if account_has_oauth_token(account) {
+            ensure_oauth_token_profile(&profile_root_for_account(account))?;
+            return Ok(());
+        }
         materialize_account_credentials(account)?;
         storage::ensure_exists(Path::new(&account.auth_path), "managed Claude profile")?;
         Ok(())
@@ -194,6 +205,14 @@ impl ClaudeAdapter {
         }
         Ok(())
     }
+}
+
+fn account_has_oauth_token(account: &AccountRecord) -> bool {
+    account
+        .oauth_token
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty())
 }
 
 fn resolve_profile_root(raw_path: &Path) -> PathBuf {
@@ -398,6 +417,38 @@ mod tests {
                 .join("sessions")
                 .exists()
         );
+        Ok(())
+    }
+
+    #[test]
+    fn reimport_preserves_existing_oauth_token() -> Result<()> {
+        let tmp = std::env::temp_dir().join(format!("sclaude-reimport-{}", Uuid::new_v4()));
+        fs::create_dir_all(&tmp)?;
+        let raw_home = tmp.join("raw");
+        fs::create_dir_all(&raw_home)?;
+        fs::write(
+            raw_home.join(".claude.json"),
+            serde_json::json!({
+                "userID": "acct-1"
+            })
+            .to_string(),
+        )?;
+
+        let state_dir = tmp.join("state");
+        let mut state = State::default();
+        let adapter = ClaudeAdapter;
+        let first = adapter.import_auth_path(&state_dir, &mut state, &raw_home)?;
+        state.accounts[0].oauth_token = Some("sk-ant-oat-preservedabcdef".into());
+        state.accounts[0].oauth_token_created_at = Some(123);
+
+        let second = adapter.import_auth_path(&state_dir, &mut state, &raw_home)?;
+
+        assert_eq!(first.id, second.id);
+        assert_eq!(
+            state.accounts[0].oauth_token.as_deref(),
+            Some("sk-ant-oat-preservedabcdef")
+        );
+        assert_eq!(state.accounts[0].oauth_token_created_at, Some(123));
         Ok(())
     }
 }

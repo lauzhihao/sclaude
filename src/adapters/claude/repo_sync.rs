@@ -12,13 +12,12 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use super::ClaudeAdapter;
 use super::credentials::{
-    ClaudeCredentialBundle, capture_credential_bundle, credential_bundle_key,
-    credential_bundle_key_for_id, load_credential_bundle, restore_credential_bundle,
-    save_credential_bundle,
+    ClaudeCredentialBundle, capture_credential_bundle, credential_bundle_key_for_id,
+    restore_credential_bundle, save_credential_bundle,
 };
-use super::paths::{find_program, managed_auth_file, profile_root_for_account};
+use super::paths::{find_program, managed_auth_file};
+use super::{ClaudeAdapter, ensure_oauth_token_profile};
 use crate::core::state::{AccountRecord, STATE_VERSION, State};
 use crate::core::storage;
 use crate::core::ui as core_ui;
@@ -170,8 +169,13 @@ struct RepoBundleAccount {
     credential_bundle_key: Option<String>,
     #[serde(default)]
     credential_bundle_b64: Option<String>,
+    #[serde(default)]
+    oauth_token: Option<String>,
+    #[serde(default)]
+    oauth_token_created_at: Option<i64>,
     added_at: i64,
     updated_at: i64,
+    #[serde(default)]
     files: Vec<RepoBundleFile>,
 }
 
@@ -206,13 +210,6 @@ fn build_repo_bundle(state: &State) -> Result<RepoBundle> {
 }
 
 fn export_account_bundle(account: &AccountRecord) -> Result<RepoBundleAccount> {
-    let root = profile_root_for_account(account);
-    storage::ensure_exists(&root, "managed Claude profile")?;
-    let files = collect_profile_files(&root)?;
-    let bundle_key = credential_bundle_key(account);
-    let credential_bundle = load_credential_bundle(&root, &bundle_key)?
-        .or_else(|| capture_profile_bundle_for_export(&root).ok());
-
     Ok(RepoBundleAccount {
         id: account.id.clone(),
         email: account.email.clone(),
@@ -221,15 +218,13 @@ fn export_account_bundle(account: &AccountRecord) -> Result<RepoBundleAccount> {
         account_id: account.account_id.clone(),
         identity_fingerprint: account.identity_fingerprint.clone(),
         plan: account.plan.clone(),
-        credential_bundle_key: Some(bundle_key),
-        credential_bundle_b64: credential_bundle
-            .as_ref()
-            .map(serde_json::to_vec)
-            .transpose()?
-            .map(|bytes| BASE64_STANDARD.encode(bytes)),
+        credential_bundle_key: account.credential_bundle_key.clone(),
+        credential_bundle_b64: None,
+        oauth_token: account.oauth_token.clone(),
+        oauth_token_created_at: account.oauth_token_created_at,
         added_at: account.added_at,
         updated_at: account.updated_at,
-        files,
+        files: Vec::new(),
     })
 }
 
@@ -428,6 +423,13 @@ fn overwrite_local_account_pool(state_dir: &Path, bundle: &RepoBundle) -> Result
                 .context("failed to parse Claude credential bundle")?;
             save_credential_bundle(&staged_home, &credential_bundle_key, &bundle)?;
             restore_credential_bundle(&staged_home, &bundle)?;
+        } else if account
+            .oauth_token
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
+        {
+            ensure_oauth_token_profile(&staged_home)?;
         }
         // 使用最终位置（rename 之后）而非临时位置来设置 auth_path 和 config_path
         let final_account_home = accounts_root.join(&account.id);
@@ -443,6 +445,8 @@ fn overwrite_local_account_pool(state_dir: &Path, bundle: &RepoBundle) -> Result
             auth_path: auth_path.to_string_lossy().into_owned(),
             config_path: Some(final_account_home.to_string_lossy().into_owned()),
             credential_bundle_key: Some(credential_bundle_key),
+            oauth_token: account.oauth_token.clone(),
+            oauth_token_created_at: account.oauth_token_created_at,
             added_at: account.added_at,
             updated_at: account.updated_at,
         });
@@ -712,9 +716,10 @@ mod tests {
     use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 
     use super::{
-        RepoBundle, RepoBundleAccount, RepoBundleFile, overwrite_local_account_pool,
-        resolve_bundle_dir, resolve_bundle_dir_source,
+        RepoBundle, RepoBundleAccount, RepoBundleFile, build_repo_bundle,
+        overwrite_local_account_pool, resolve_bundle_dir, resolve_bundle_dir_source,
     };
+    use crate::core::state::{AccountRecord, State};
 
     #[test]
     fn bundle_dir_defaults_to_sclaude_location() -> Result<()> {
@@ -759,6 +764,8 @@ mod tests {
                 plan: Some("pro".into()),
                 credential_bundle_key: None,
                 credential_bundle_b64: None,
+                oauth_token: None,
+                oauth_token_created_at: None,
                 added_at: 1,
                 updated_at: 2,
                 files: vec![
@@ -783,6 +790,82 @@ mod tests {
                 .join("sessions")
                 .join("1.json")
                 .exists()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn build_repo_bundle_exports_token_without_profile_files() -> Result<()> {
+        let state = State {
+            accounts: vec![AccountRecord {
+                id: "acct-1".into(),
+                email: "a@example.com".into(),
+                account_kind: Some("oauth".into()),
+                account_id: Some("org-1".into()),
+                identity_fingerprint: Some("oauth:org-1".into()),
+                oauth_token: Some("sk-ant-oat-exampleabcdef".into()),
+                oauth_token_created_at: Some(1),
+                added_at: 1,
+                updated_at: 2,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let bundle = build_repo_bundle(&state)?;
+
+        assert_eq!(bundle.accounts.len(), 1);
+        let account = &bundle.accounts[0];
+        assert_eq!(
+            account.oauth_token.as_deref(),
+            Some("sk-ant-oat-exampleabcdef")
+        );
+        assert_eq!(account.oauth_token_created_at, Some(1));
+        assert!(account.files.is_empty());
+        assert!(account.credential_bundle_b64.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn overwrite_local_account_pool_restores_token_only_profile() -> Result<()> {
+        let tmp =
+            std::env::temp_dir().join(format!("sclaude-token-overwrite-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&tmp)?;
+
+        let bundle = RepoBundle {
+            version: 1,
+            exported_at: 0,
+            accounts: vec![RepoBundleAccount {
+                id: "acct-token".into(),
+                email: "token@example.com".into(),
+                account_kind: Some("oauth".into()),
+                provider_id: None,
+                account_id: Some("org-token".into()),
+                identity_fingerprint: Some("oauth:org-token".into()),
+                plan: Some("pro".into()),
+                credential_bundle_key: None,
+                credential_bundle_b64: None,
+                oauth_token: Some("sk-ant-oat-tokenabcdef".into()),
+                oauth_token_created_at: Some(1),
+                added_at: 1,
+                updated_at: 2,
+                files: Vec::new(),
+            }],
+        };
+
+        let state = overwrite_local_account_pool(&tmp, &bundle)?;
+        let account = &state.accounts[0];
+        assert_eq!(
+            account.oauth_token.as_deref(),
+            Some("sk-ant-oat-tokenabcdef")
+        );
+        assert_eq!(account.oauth_token_created_at, Some(1));
+        let auth_path = tmp.join("accounts").join("acct-token").join(".claude.json");
+        let auth: serde_json::Value = serde_json::from_str(&fs::read_to_string(auth_path)?)?;
+        assert_eq!(
+            auth.get("hasCompletedOnboarding")
+                .and_then(serde_json::Value::as_bool),
+            Some(true)
         );
         Ok(())
     }
