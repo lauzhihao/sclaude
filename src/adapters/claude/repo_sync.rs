@@ -16,7 +16,7 @@ use super::credentials::{
     ClaudeCredentialBundle, capture_credential_bundle, credential_bundle_key_for_id,
     restore_credential_bundle, save_credential_bundle,
 };
-use super::paths::{find_program, managed_auth_file};
+use super::paths::{find_program, managed_auth_file, profile_root_for_account};
 use super::{ClaudeAdapter, ensure_oauth_token_profile};
 use crate::core::state::{AccountRecord, STATE_VERSION, State};
 use crate::core::storage;
@@ -199,7 +199,8 @@ fn build_repo_bundle(state: &State) -> Result<RepoBundle> {
 
     let mut bundle_accounts = Vec::with_capacity(accounts.len());
     for account in accounts {
-        bundle_accounts.push(export_account_bundle(account)?);
+        let profile_root = profile_root_for_account(account);
+        bundle_accounts.push(export_account_bundle(account, &profile_root)?);
     }
 
     Ok(RepoBundle {
@@ -209,7 +210,27 @@ fn build_repo_bundle(state: &State) -> Result<RepoBundle> {
     })
 }
 
-fn export_account_bundle(account: &AccountRecord) -> Result<RepoBundleAccount> {
+fn export_account_bundle(
+    account: &AccountRecord,
+    profile_root: &Path,
+) -> Result<RepoBundleAccount> {
+    // 把 .claude.json + .credentials.json 打包进 bundle，让 pull 端能无 GUI 恢复登录。
+    // profile 残缺时（比如用户手动删过目录）降级为 None，避免影响其他账户 push。
+    let credential_bundle_b64 = match capture_profile_bundle_for_export(profile_root) {
+        Ok(bundle) => {
+            let bytes = serde_json::to_vec(&bundle)
+                .context("failed to serialize Claude credential bundle for export")?;
+            Some(BASE64_STANDARD.encode(bytes))
+        }
+        Err(err) => {
+            eprintln!(
+                "[sclaude] skip credential bundle for {}: {}",
+                account.id, err
+            );
+            None
+        }
+    };
+
     Ok(RepoBundleAccount {
         id: account.id.clone(),
         email: account.email.clone(),
@@ -219,7 +240,7 @@ fn export_account_bundle(account: &AccountRecord) -> Result<RepoBundleAccount> {
         identity_fingerprint: account.identity_fingerprint.clone(),
         plan: account.plan.clone(),
         credential_bundle_key: account.credential_bundle_key.clone(),
-        credential_bundle_b64: None,
+        credential_bundle_b64,
         oauth_token: account.oauth_token.clone(),
         oauth_token_created_at: account.oauth_token_created_at,
         added_at: account.added_at,
@@ -795,7 +816,12 @@ mod tests {
     }
 
     #[test]
-    fn build_repo_bundle_exports_token_without_profile_files() -> Result<()> {
+    fn build_repo_bundle_falls_back_when_profile_missing() -> Result<()> {
+        // profile 目录被清理掉时，push 应该降级为仅导出元数据 + oauth_token，不报错
+        let missing = std::env::temp_dir()
+            .join(format!("sclaude-missing-profile-{}", uuid::Uuid::new_v4()));
+        assert!(!missing.exists());
+
         let state = State {
             accounts: vec![AccountRecord {
                 id: "acct-1".into(),
@@ -803,6 +829,7 @@ mod tests {
                 account_kind: Some("oauth".into()),
                 account_id: Some("org-1".into()),
                 identity_fingerprint: Some("oauth:org-1".into()),
+                config_path: Some(missing.to_string_lossy().into_owned()),
                 oauth_token: Some("sk-ant-oat-exampleabcdef".into()),
                 oauth_token_created_at: Some(1),
                 added_at: 1,
@@ -823,6 +850,105 @@ mod tests {
         assert_eq!(account.oauth_token_created_at, Some(1));
         assert!(account.files.is_empty());
         assert!(account.credential_bundle_b64.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn build_repo_bundle_captures_credential_bundle_when_profile_exists() -> Result<()> {
+        let profile = std::env::temp_dir()
+            .join(format!("sclaude-profile-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&profile)?;
+        fs::write(
+            profile.join(".claude.json"),
+            br#"{"hasCompletedOnboarding":true}"#,
+        )?;
+        fs::write(
+            profile.join(".credentials.json"),
+            br#"{"claudeAiOauth":{"accessToken":"test-token"}}"#,
+        )?;
+
+        let state = State {
+            accounts: vec![AccountRecord {
+                id: "acct-bundle".into(),
+                email: "bundle@example.com".into(),
+                account_kind: Some("oauth".into()),
+                account_id: Some("org-bundle".into()),
+                identity_fingerprint: Some("oauth:org-bundle".into()),
+                config_path: Some(profile.to_string_lossy().into_owned()),
+                credential_bundle_key: Some("claude-bundle-acct-bundle".into()),
+                added_at: 1,
+                updated_at: 2,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let bundle = build_repo_bundle(&state)?;
+        let account = &bundle.accounts[0];
+        let payload_b64 = account
+            .credential_bundle_b64
+            .as_deref()
+            .expect("credential bundle should be captured");
+        let payload = BASE64_STANDARD.decode(payload_b64)?;
+        let captured: serde_json::Value = serde_json::from_slice(&payload)?;
+        // auth_json / credentials_json 是字节数组，验证反序列化后两个字段都存在且非空
+        assert!(captured.get("auth_json").and_then(|v| v.as_array()).is_some());
+        assert!(
+            captured
+                .get("credentials_json")
+                .and_then(|v| v.as_array())
+                .is_some()
+        );
+
+        let _ = fs::remove_dir_all(&profile);
+        Ok(())
+    }
+
+    #[test]
+    fn push_then_pull_round_trip_restores_credentials() -> Result<()> {
+        // push 源 profile
+        let src_profile = std::env::temp_dir()
+            .join(format!("sclaude-push-src-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&src_profile)?;
+        let auth_bytes = br#"{"hasCompletedOnboarding":true,"userID":"acct-rt"}"#;
+        let creds_bytes = br#"{"claudeAiOauth":{"accessToken":"sk-live-rt"}}"#;
+        fs::write(src_profile.join(".claude.json"), auth_bytes)?;
+        fs::write(src_profile.join(".credentials.json"), creds_bytes)?;
+
+        let state = State {
+            accounts: vec![AccountRecord {
+                id: "acct-rt".into(),
+                email: "rt@example.com".into(),
+                account_kind: Some("oauth".into()),
+                account_id: Some("org-rt".into()),
+                identity_fingerprint: Some("oauth:org-rt".into()),
+                config_path: Some(src_profile.to_string_lossy().into_owned()),
+                credential_bundle_key: Some("claude-bundle-acct-rt".into()),
+                added_at: 1,
+                updated_at: 2,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let bundle = build_repo_bundle(&state)?;
+
+        // pull 目标 state_dir（独立于 push 源）
+        let dst_state_dir = std::env::temp_dir()
+            .join(format!("sclaude-pull-dst-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dst_state_dir)?;
+        let restored = overwrite_local_account_pool(&dst_state_dir, &bundle)?;
+
+        assert_eq!(restored.accounts.len(), 1);
+        let dst_profile = dst_state_dir.join("accounts").join("acct-rt");
+        assert_eq!(fs::read(dst_profile.join(".claude.json"))?, auth_bytes);
+        assert_eq!(
+            fs::read(dst_profile.join(".credentials.json"))?,
+            creds_bytes
+        );
+
+        let _ = fs::remove_dir_all(&src_profile);
+        let _ = fs::remove_dir_all(&dst_state_dir);
         Ok(())
     }
 

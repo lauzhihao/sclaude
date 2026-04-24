@@ -75,7 +75,29 @@ pub fn load_state(state_dir: &Path) -> Result<State> {
     let mut state: State = serde_json::from_str(&contents)
         .with_context(|| format!("invalid state file: {}", state_file.display()))?;
     normalize_state_account_paths(state_dir, &mut state);
+    drop_legacy_unknown_accounts(&mut state);
     Ok(state)
+}
+
+// 清理历史上 read_auth_status 硬编码 "unknown@claude" 时遗留的伪账号。
+// 只匹配 email + account_id 两个关键字段都对得上伪造特征的记录，避免误删。
+fn drop_legacy_unknown_accounts(state: &mut State) {
+    let mut dropped_ids = Vec::new();
+    state.accounts.retain(|account| {
+        let is_legacy = account.email.eq_ignore_ascii_case("unknown@claude")
+            && account.account_id.is_none();
+        if is_legacy {
+            dropped_ids.push(account.id.clone());
+        }
+        !is_legacy
+    });
+    for id in &dropped_ids {
+        eprintln!("[sclaude] dropped legacy placeholder account {id}");
+        state.usage_cache.remove(id);
+        if state.current_account_id.as_deref() == Some(id.as_str()) {
+            state.current_account_id = None;
+        }
+    }
 }
 
 pub fn save_state(state_dir: &Path, state: &State) -> Result<()> {
@@ -190,7 +212,8 @@ mod tests {
     use std::path::Path;
 
     use super::{
-        RepoSyncConfig, default_state_dir_for_home, load_repo_sync_config, save_repo_sync_config,
+        RepoSyncConfig, default_state_dir_for_home, load_repo_sync_config, load_state,
+        save_repo_sync_config,
     };
 
     #[test]
@@ -212,6 +235,74 @@ mod tests {
         assert_eq!(super::bin_dir(state_dir), state_dir.join("bin"));
         assert_eq!(super::runtime_dir(state_dir), state_dir.join("runtime"));
         assert_eq!(super::tmp_dir(state_dir), state_dir.join("tmp"));
+    }
+
+    #[test]
+    fn load_state_drops_legacy_unknown_placeholder_accounts() {
+        let dir = std::env::temp_dir().join(format!("sclaude-legacy-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).expect("create temp dir");
+        let state_json = r#"{
+            "version": 1,
+            "accounts": [
+                {
+                    "id": "real",
+                    "email": "real@example.com",
+                    "account_id": "org-real",
+                    "auth_path": "",
+                    "added_at": 1,
+                    "updated_at": 1
+                },
+                {
+                    "id": "legacy",
+                    "email": "unknown@claude",
+                    "account_id": null,
+                    "auth_path": "",
+                    "added_at": 2,
+                    "updated_at": 2
+                }
+            ],
+            "usage_cache": {
+                "legacy": {}
+            },
+            "current_account_id": "legacy"
+        }"#;
+        fs::write(dir.join("state.json"), state_json).expect("write state");
+
+        let state = load_state(&dir).expect("load state");
+
+        assert_eq!(state.accounts.len(), 1);
+        assert_eq!(state.accounts[0].id, "real");
+        assert!(state.current_account_id.is_none());
+        assert!(!state.usage_cache.contains_key("legacy"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_state_keeps_unknown_email_when_account_id_present() {
+        // 有 account_id 说明身份其实是真的（只是 email 不正常），不应误删
+        let dir = std::env::temp_dir().join(format!("sclaude-keep-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).expect("create temp dir");
+        let state_json = r#"{
+            "version": 1,
+            "accounts": [
+                {
+                    "id": "kept",
+                    "email": "unknown@claude",
+                    "account_id": "org-present",
+                    "auth_path": "",
+                    "added_at": 1,
+                    "updated_at": 1
+                }
+            ],
+            "usage_cache": {},
+            "current_account_id": "kept"
+        }"#;
+        fs::write(dir.join("state.json"), state_json).expect("write state");
+
+        let state = load_state(&dir).expect("load state");
+        assert_eq!(state.accounts.len(), 1);
+        assert_eq!(state.current_account_id.as_deref(), Some("kept"));
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

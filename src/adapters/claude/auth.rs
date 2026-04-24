@@ -82,22 +82,39 @@ impl ClaudeAdapter {
 
         let payload: AuthStatusResponse = serde_json::from_slice(&output.stdout)
             .context("failed to decode `claude auth status` output")?;
-        if !payload.logged_in {
-            anyhow::bail!("account is not logged in");
-        }
-
-        let email = payload
-            .email
-            .map(|value| value.trim().to_ascii_lowercase())
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| "unknown@claude".into());
-
-        Ok(AuthStatus {
-            email,
-            org_id: payload.org_id,
-            subscription_type: payload.subscription_type,
-        })
+        parse_auth_status(payload)
     }
+}
+
+// 新版 claude auth status 在 OAuth token 登录下可能只返回 loggedIn/authMethod，
+// 不带 email/orgId。过去硬编码回填 "unknown@claude" 会在 import_known_sources 阶段
+// 生成一条永远匹配不上的伪账号；这里要求至少有 email 或 orgId，否则上层会 bail
+// 然后回退到读 .claude.json 本身识别身份。
+fn parse_auth_status(payload: AuthStatusResponse) -> Result<AuthStatus> {
+    if !payload.logged_in {
+        anyhow::bail!("account is not logged in");
+    }
+
+    let email = payload
+        .email
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty());
+    let org_id = payload
+        .org_id
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+
+    if email.is_none() && org_id.is_none() {
+        anyhow::bail!(
+            "`claude auth status` did not return an account identity (no email or orgId)"
+        );
+    }
+
+    Ok(AuthStatus {
+        email,
+        org_id,
+        subscription_type: payload.subscription_type,
+    })
 }
 
 pub(super) fn decode_identity(auth: &Value) -> Result<LiveIdentityWithPlan> {
@@ -241,7 +258,7 @@ pub(super) struct LiveIdentityWithPlan {
 
 #[derive(Debug)]
 pub(super) struct AuthStatus {
-    pub(super) email: String,
+    pub(super) email: Option<String>,
     pub(super) org_id: Option<String>,
     pub(super) subscription_type: Option<String>,
 }
@@ -253,10 +270,18 @@ impl AuthStatus {
             org_id,
             subscription_type,
         } = self;
-        let identity_fingerprint = oauth_identity_fingerprint(org_id.as_deref(), Some(&email));
+        // parse_auth_status 已保证 email / org_id 至少一个非空。
+        let display = email.clone().unwrap_or_else(|| {
+            let short = org_id
+                .as_deref()
+                .map(short_token)
+                .unwrap_or_else(|| "unknown".into());
+            format!("org-{short}@claude")
+        });
+        let identity_fingerprint = oauth_identity_fingerprint(org_id.as_deref(), email.as_deref());
 
         LiveIdentityWithPlan {
-            email,
+            email: display,
             account_kind: Some("oauth".into()),
             provider_id: None,
             account_id: org_id,
@@ -335,7 +360,7 @@ pub(super) fn oauth_identity_fingerprint(account_id: Option<&str>, email: Option
 mod tests {
     use anyhow::Result;
 
-    use super::decode_identity;
+    use super::{AuthStatusResponse, decode_identity, parse_auth_status};
 
     #[test]
     fn decode_identity_prefers_user_id() -> Result<()> {
@@ -373,5 +398,64 @@ mod tests {
         });
 
         assert!(decode_identity(&auth).is_err());
+    }
+
+    fn auth_status_payload(
+        logged_in: bool,
+        email: Option<&str>,
+        org_id: Option<&str>,
+    ) -> AuthStatusResponse {
+        AuthStatusResponse {
+            logged_in,
+            email: email.map(ToOwned::to_owned),
+            org_id: org_id.map(ToOwned::to_owned),
+            subscription_type: None,
+        }
+    }
+
+    #[test]
+    fn parse_auth_status_bails_on_minimal_oauth_token_payload() {
+        // 新版 claude auth status 仅返回 loggedIn/authMethod/apiProvider 的场景
+        let result = parse_auth_status(auth_status_payload(true, None, None));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_auth_status_bails_when_logged_out() {
+        let result = parse_auth_status(auth_status_payload(false, Some("a@b.com"), None));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_auth_status_accepts_email_only_payload() -> Result<()> {
+        let status = parse_auth_status(auth_status_payload(true, Some("User@Example.com"), None))?;
+        assert_eq!(status.email.as_deref(), Some("user@example.com"));
+        assert!(status.org_id.is_none());
+        let identity = status.into_identity();
+        assert_eq!(identity.email, "user@example.com");
+        Ok(())
+    }
+
+    #[test]
+    fn parse_auth_status_accepts_org_id_only_payload() -> Result<()> {
+        let status = parse_auth_status(auth_status_payload(true, None, Some("org-123456789abc")))?;
+        assert!(status.email.is_none());
+        assert_eq!(status.org_id.as_deref(), Some("org-123456789abc"));
+        let identity = status.into_identity();
+        // 无 email 时用 org_id 短哈希派生 display，避免写死 unknown@claude
+        assert!(
+            identity.email.starts_with("org-"),
+            "display should derive from org_id, got {}",
+            identity.email
+        );
+        assert!(identity.email.ends_with("@claude"));
+        assert_eq!(identity.account_id.as_deref(), Some("org-123456789abc"));
+        Ok(())
+    }
+
+    #[test]
+    fn parse_auth_status_treats_empty_strings_as_missing() {
+        let result = parse_auth_status(auth_status_payload(true, Some("   "), Some("")));
+        assert!(result.is_err());
     }
 }
