@@ -349,7 +349,7 @@ impl ClaudeAdapter {
             println!("{}", ui.resume_session());
             let mut command = Command::new(&resume_cmd[0]);
             command.args(&resume_cmd[1..]);
-            apply_claude_runtime_env(&mut command, account, &profile_root);
+            apply_claude_runtime_env(&mut command, account, &profile_root)?;
             let status = command
                 .status()
                 .context("failed to execute claude continue")?;
@@ -363,7 +363,7 @@ impl ClaudeAdapter {
 
         let mut command = Command::new(&fresh_cmd[0]);
         command.args(&fresh_cmd[1..]);
-        apply_claude_runtime_env(&mut command, account, &profile_root);
+        apply_claude_runtime_env(&mut command, account, &profile_root)?;
         let status = command.status().context("failed to execute claude")?;
         Ok(status.code().unwrap_or(1))
     }
@@ -380,7 +380,7 @@ impl ClaudeAdapter {
         let command = build_passthrough_command(&claude_bin, extra_args);
         let mut process = Command::new(&command[0]);
         process.args(&command[1..]);
-        apply_claude_runtime_env(&mut process, account, &profile_root);
+        apply_claude_runtime_env(&mut process, account, &profile_root)?;
         let status = process
             .status()
             .with_context(|| format!("failed to execute {}", claude_bin.display()))?;
@@ -559,7 +559,11 @@ fn default_pty_size() -> PtySize {
     }
 }
 
-fn apply_claude_runtime_env(command: &mut Command, account: &AccountRecord, profile_root: &Path) {
+fn apply_claude_runtime_env(
+    command: &mut Command,
+    account: &AccountRecord,
+    profile_root: &Path,
+) -> Result<()> {
     command
         .env("CLAUDE_CONFIG_DIR", profile_root)
         .env("IS_SANDBOX", "1");
@@ -571,6 +575,48 @@ fn apply_claude_runtime_env(command: &mut Command, account: &AccountRecord, prof
     {
         command.env("CLAUDE_CODE_OAUTH_TOKEN", token);
     }
+    if account.account_kind.as_deref() == Some("api") {
+        apply_api_runtime_env(command, profile_root)?;
+    }
+    Ok(())
+}
+
+fn apply_api_runtime_env(command: &mut Command, profile_root: &Path) -> Result<()> {
+    let auth_path = managed_auth_file(profile_root);
+    let auth = fs::read_to_string(&auth_path)
+        .with_context(|| format!("failed to read {}", auth_path.display()))?;
+    let auth: Value = serde_json::from_str(&auth)
+        .with_context(|| format!("invalid JSON in {}", auth_path.display()))?;
+    let api_key = required_auth_string(&auth, "ANTHROPIC_API_KEY", &auth_path)?;
+    let base_url = required_auth_string(&auth, "ANTHROPIC_BASE_URL", &auth_path)?;
+
+    command
+        .env("ANTHROPIC_API_KEY", api_key)
+        .env("ANTHROPIC_BASE_URL", base_url);
+
+    if let Some(provider) = optional_auth_string(&auth, "ANTHROPIC_PROVIDER_ID")
+        .or_else(|| optional_auth_string(&auth, "providerId"))
+    {
+        command.env("ANTHROPIC_PROVIDER_ID", provider);
+    }
+    Ok(())
+}
+
+fn required_auth_string(auth: &Value, key: &str, auth_path: &Path) -> Result<String> {
+    optional_auth_string(auth, key).ok_or_else(|| {
+        anyhow::anyhow!(
+            "API account profile {} is missing required {key}",
+            auth_path.display()
+        )
+    })
+}
+
+fn optional_auth_string(auth: &Value, key: &str) -> Option<String> {
+    auth.get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 pub(super) fn ensure_oauth_token_profile(profile_root: &Path) -> Result<()> {
@@ -733,7 +779,9 @@ fn detect_local_ip() -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::ffi::OsString;
+    use std::fs;
     use std::path::Path;
     use std::process::Command;
 
@@ -781,17 +829,9 @@ mod tests {
         };
         let mut command = Command::new("claude");
 
-        apply_claude_runtime_env(&mut command, &account, Path::new("/tmp/profile"));
+        apply_claude_runtime_env(&mut command, &account, Path::new("/tmp/profile")).unwrap();
 
-        let envs = command
-            .get_envs()
-            .map(|(key, value)| {
-                (
-                    key.to_string_lossy().into_owned(),
-                    value.map(|item| item.to_string_lossy().into_owned()),
-                )
-            })
-            .collect::<std::collections::BTreeMap<_, _>>();
+        let envs = command_envs(&command);
         assert_eq!(
             envs.get("CLAUDE_CODE_OAUTH_TOKEN").and_then(Option::as_ref),
             Some(&"sk-ant-oat-exampleabcdef".to_string())
@@ -804,6 +844,71 @@ mod tests {
             envs.get("CLAUDE_CONFIG_DIR").and_then(Option::as_ref),
             Some(&expected_profile)
         );
+    }
+
+    #[test]
+    fn runtime_env_includes_api_credentials_from_profile() {
+        let profile_root = temp_profile_root("sclaude-api-runtime-env");
+        fs::create_dir_all(&profile_root).unwrap();
+        fs::write(
+            profile_root.join(".claude.json"),
+            r#"{
+                "ANTHROPIC_API_KEY": "sk-ant-api03-example",
+                "ANTHROPIC_BASE_URL": "https://api.example.com",
+                "providerId": "example"
+            }"#,
+        )
+        .unwrap();
+        let account = AccountRecord {
+            account_kind: Some("api".into()),
+            ..Default::default()
+        };
+        let mut command = Command::new("claude");
+
+        apply_claude_runtime_env(&mut command, &account, &profile_root).unwrap();
+
+        let envs = command_envs(&command);
+        assert_eq!(
+            envs.get("ANTHROPIC_API_KEY").and_then(Option::as_ref),
+            Some(&"sk-ant-api03-example".to_string())
+        );
+        assert_eq!(
+            envs.get("ANTHROPIC_BASE_URL").and_then(Option::as_ref),
+            Some(&"https://api.example.com".to_string())
+        );
+        assert_eq!(
+            envs.get("ANTHROPIC_PROVIDER_ID").and_then(Option::as_ref),
+            Some(&"example".to_string())
+        );
+
+        let _ = fs::remove_dir_all(profile_root);
+    }
+
+    #[test]
+    fn runtime_env_rejects_api_profile_missing_required_fields() {
+        let profile_root = temp_profile_root("sclaude-api-runtime-env-missing");
+        fs::create_dir_all(&profile_root).unwrap();
+        fs::write(
+            profile_root.join(".claude.json"),
+            r#"{"ANTHROPIC_BASE_URL":"https://api.example.com"}"#,
+        )
+        .unwrap();
+        let account = AccountRecord {
+            account_kind: Some("api".into()),
+            ..Default::default()
+        };
+        let mut command = Command::new("claude");
+
+        let error = apply_claude_runtime_env(&mut command, &account, &profile_root)
+            .expect_err("missing API key should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("missing required ANTHROPIC_API_KEY")
+        );
+
+        let _ = fs::remove_dir_all(profile_root);
     }
 
     #[test]
@@ -823,5 +928,21 @@ mod tests {
             extract_setup_token("Copy the sk-ant-oat... token from Claude"),
             None
         );
+    }
+
+    fn command_envs(command: &Command) -> BTreeMap<String, Option<String>> {
+        command
+            .get_envs()
+            .map(|(key, value)| {
+                (
+                    key.to_string_lossy().into_owned(),
+                    value.map(|item| item.to_string_lossy().into_owned()),
+                )
+            })
+            .collect()
+    }
+
+    fn temp_profile_root(prefix: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("{prefix}-{}", uuid::Uuid::new_v4()))
     }
 }
