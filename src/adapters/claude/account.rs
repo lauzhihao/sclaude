@@ -15,7 +15,7 @@ use super::paths::{
     claude_config_root, default_claude_auth_file, find_claude_auth_file, managed_auth_file,
     profile_root_for_account,
 };
-use super::{ClaudeAdapter, ensure_oauth_token_profile};
+use super::{ClaudeAdapter, ensure_api_key_profile, ensure_oauth_token_profile};
 use crate::core::state::{AccountRecord, State};
 use crate::core::storage;
 
@@ -185,6 +185,9 @@ impl ClaudeAdapter {
         }
         materialize_account_credentials(account)?;
         storage::ensure_exists(Path::new(&account.auth_path), "managed Claude profile")?;
+        if account.account_kind.as_deref() == Some("api") {
+            ensure_api_key_profile(&profile_root_for_account(account))?;
+        }
         Ok(())
     }
 
@@ -386,7 +389,7 @@ mod tests {
     use uuid::Uuid;
 
     use crate::adapters::claude::ClaudeAdapter;
-    use crate::core::state::State;
+    use crate::core::state::{AccountRecord, State};
 
     #[test]
     fn import_auth_path_copies_profile_into_state_storage() -> Result<()> {
@@ -449,6 +452,43 @@ mod tests {
             Some("sk-ant-oat-preservedabcdef")
         );
         assert_eq!(state.accounts[0].oauth_token_created_at, Some(123));
+        Ok(())
+    }
+
+    #[test]
+    fn switch_account_repairs_api_profile_onboarding() -> Result<()> {
+        let tmp = std::env::temp_dir().join(format!("sclaude-api-switch-{}", Uuid::new_v4()));
+        let profile_root = tmp.join("accounts").join("acct-api");
+        fs::create_dir_all(&profile_root)?;
+        let auth_path = profile_root.join(".claude.json");
+        fs::write(
+            &auth_path,
+            serde_json::json!({
+                "ANTHROPIC_API_KEY": "sk-ant-api03-example",
+                "ANTHROPIC_BASE_URL": "https://api.example.com",
+                "providerId": "example"
+            })
+            .to_string(),
+        )?;
+        let account = AccountRecord {
+            id: "acct-api".into(),
+            email: "key-example@example".into(),
+            account_kind: Some("api".into()),
+            auth_path: auth_path.to_string_lossy().into_owned(),
+            config_path: Some(profile_root.to_string_lossy().into_owned()),
+            ..Default::default()
+        };
+        let adapter = ClaudeAdapter;
+
+        adapter.switch_account(&account)?;
+
+        let auth: serde_json::Value = serde_json::from_str(&fs::read_to_string(&auth_path)?)?;
+        assert_eq!(
+            auth.get("hasCompletedOnboarding")
+                .and_then(serde_json::Value::as_bool),
+            Some(true)
+        );
+        let _ = fs::remove_dir_all(tmp);
         Ok(())
     }
 }

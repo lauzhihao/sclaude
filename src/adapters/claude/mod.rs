@@ -273,6 +273,7 @@ impl ClaudeAdapter {
             "ANTHROPIC_BASE_URL": normalized_base_url,
             "ANTHROPIC_API_KEY": normalized_api_key,
             "providerId": normalized_provider,
+            "hasCompletedOnboarding": true,
         });
         fs::write(&auth_path, serde_json::to_vec_pretty(&auth_json)?)
             .with_context(|| format!("failed to write {}", auth_path.display()))?;
@@ -638,6 +639,43 @@ pub(super) fn ensure_oauth_token_profile(profile_root: &Path) -> Result<()> {
     Ok(())
 }
 
+pub(super) fn ensure_api_key_profile(profile_root: &Path) -> Result<()> {
+    fs::create_dir_all(profile_root)
+        .with_context(|| format!("failed to create {}", profile_root.display()))?;
+    let auth_path = managed_auth_file(profile_root);
+    let mut auth = fs::read_to_string(&auth_path)
+        .with_context(|| format!("failed to read {}", auth_path.display()))
+        .and_then(|contents| {
+            serde_json::from_str::<Value>(&contents)
+                .with_context(|| format!("invalid JSON in {}", auth_path.display()))
+        })?;
+
+    if optional_auth_string(&auth, "ANTHROPIC_API_KEY").is_none() {
+        bail!(
+            "API account profile {} is missing required ANTHROPIC_API_KEY",
+            auth_path.display()
+        );
+    }
+    if optional_auth_string(&auth, "ANTHROPIC_BASE_URL").is_none() {
+        bail!(
+            "API account profile {} is missing required ANTHROPIC_BASE_URL",
+            auth_path.display()
+        );
+    }
+
+    let object = auth.as_object_mut().ok_or_else(|| {
+        anyhow::anyhow!(
+            "API account profile {} must be a JSON object",
+            auth_path.display()
+        )
+    })?;
+    object.insert("hasCompletedOnboarding".into(), json!(true));
+
+    fs::write(&auth_path, serde_json::to_vec_pretty(&auth)?)
+        .with_context(|| format!("failed to write {}", auth_path.display()))?;
+    Ok(())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BrowserOpenOutcome {
     Opened,
@@ -789,7 +827,9 @@ mod tests {
         apply_claude_runtime_env, build_claude_launch_command, contains_resume_flag,
         extract_setup_token, parse_yes_no,
     };
+    use crate::adapters::claude::ClaudeAdapter;
     use crate::core::state::AccountRecord;
+    use crate::core::state::State;
 
     #[test]
     fn build_launch_command_adds_model_flags_when_missing() {
@@ -909,6 +949,34 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(profile_root);
+    }
+
+    #[test]
+    fn api_login_profile_marks_onboarding_complete() {
+        let state_dir = temp_profile_root("sclaude-api-login-onboarding");
+        fs::create_dir_all(&state_dir).unwrap();
+        let mut state = State::default();
+        let adapter = ClaudeAdapter;
+
+        let record = adapter
+            .run_api_key_login(
+                &state_dir,
+                &mut state,
+                "example",
+                "https://api.example.com",
+                "sk-ant-api03-example",
+            )
+            .unwrap();
+
+        let auth: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(record.auth_path).unwrap()).unwrap();
+        assert_eq!(
+            auth.get("hasCompletedOnboarding")
+                .and_then(serde_json::Value::as_bool),
+            Some(true)
+        );
+
+        let _ = fs::remove_dir_all(state_dir);
     }
 
     #[test]
