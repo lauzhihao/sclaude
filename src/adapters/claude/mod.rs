@@ -1,13 +1,12 @@
 use std::env;
 use std::ffi::OsString;
 use std::fs;
-use std::io::{self, IsTerminal, Read, Write};
+use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
-use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -129,24 +128,23 @@ impl ClaudeAdapter {
         state_dir: &Path,
         state: &mut State,
         no_import_known: bool,
-        no_login: bool,
+        _no_login: bool,
         perform_switch: bool,
     ) -> Result<Option<(AccountRecord, UsageSnapshot)>> {
         if !no_import_known {
             self.import_known_sources(state_dir, state);
         }
 
-        if state.accounts.is_empty() {
-            if no_login {
-                return Ok(None);
-            }
-            let record = self.run_interactive_login(state_dir, state, None)?;
-            let usage = self.refresh_account_usage(state_dir, state, &record);
+        if let Some(current_api) = self.current_api_account(state).cloned() {
+            let usage = self.refresh_account_usage(state_dir, state, &current_api);
             if perform_switch {
-                self.switch_account(&record)?;
-                state.current_account_id = Some(record.id.clone());
+                state.current_account_id = Some(current_api.id.clone());
             }
-            return Ok(Some((record, usage)));
+            return Ok(Some((current_api, usage)));
+        }
+
+        if state.accounts.is_empty() {
+            return Ok(None);
         }
 
         self.refresh_all_accounts(state_dir, state);
@@ -180,31 +178,7 @@ impl ClaudeAdapter {
             return Ok(Some((best, usage)));
         }
 
-        if let Some(best) = state
-            .accounts
-            .iter()
-            .max_by_key(|account| account.updated_at)
-            .cloned()
-        {
-            let usage = state.usage_cache.get(&best.id).cloned().unwrap_or_default();
-            if perform_switch {
-                self.switch_account(&best)?;
-                state.current_account_id = Some(best.id.clone());
-            }
-            return Ok(Some((best, usage)));
-        }
-
-        if no_login {
-            return Ok(None);
-        }
-
-        let record = self.run_interactive_login(state_dir, state, None)?;
-        let usage = self.refresh_account_usage(state_dir, state, &record);
-        if perform_switch {
-            self.switch_account(&record)?;
-            state.current_account_id = Some(record.id.clone());
-        }
-        Ok(Some((record, usage)))
+        Ok(None)
     }
 
     pub fn run_interactive_login(
@@ -224,25 +198,21 @@ impl ClaudeAdapter {
 
         println!("{}", ui.login_start());
 
-        let mut command = Command::new(&claude_bin);
-        command
-            .args(["auth", "login", "--claudeai"])
-            .env("CLAUDE_CONFIG_DIR", &tmp_home);
-        if let Some(email) = email_hint.map(str::trim).filter(|value| !value.is_empty()) {
-            command.arg("--email").arg(email);
-        }
+        let mut command = build_oauth_login_command(&claude_bin, &tmp_home);
 
         let status = command
             .status()
             .with_context(|| format!("failed to execute {}", claude_bin.display()))?;
         if !status.success() {
             let _ = fs::remove_dir_all(&tmp_home);
+            if email_hint.map(str::trim).is_some_and(|value| !value.is_empty()) {
+                eprintln!("{}", ui.claude_login_retry_without_username());
+            }
             bail!("{}", ui.claude_login_failed(status.code().unwrap_or(1)));
         }
 
-        let mut record = self.import_auth_path(state_dir, state, &tmp_home)?;
+        let record = self.import_auth_path(state_dir, state, &tmp_home)?;
         let _ = fs::remove_dir_all(&tmp_home);
-        self.collect_setup_token(state_dir, state, &mut record)?;
         Ok(record)
     }
 
@@ -300,33 +270,37 @@ impl ClaudeAdapter {
         Ok(record)
     }
 
-    fn collect_setup_token(
+    pub fn run_setup_token(
         &self,
         state_dir: &Path,
         state: &mut State,
-        record: &mut AccountRecord,
+        account: &AccountRecord,
     ) -> Result<()> {
         let ui = core_ui::messages();
         let claude_bin = self.resolve_claude_bin(state_dir)?;
-        let profile_root = profile_root_for_account(record);
+        let profile_root = profile_root_for_account(account);
+
+        self.switch_account(account)?;
 
         println!("{}", ui.setup_token_start());
-        let token = match run_setup_token_with_pty(&claude_bin, &profile_root)? {
-            Some(token) => token,
-            None => read_setup_token_from_stdin()?,
-        };
+        let status = Command::new(&claude_bin)
+            .arg("setup-token")
+            .env("CLAUDE_CONFIG_DIR", &profile_root)
+            .status()
+            .with_context(|| format!("failed to execute {}", claude_bin.display()))?;
+        if !status.success() {
+            bail!("{}", ui.setup_token_failed(status.code().unwrap_or(1)));
+        }
+        let token = read_setup_token_from_stdin()?;
 
-        record.oauth_token = Some(token);
-        record.oauth_token_created_at = Some(now_ts());
         ensure_oauth_token_profile(&profile_root)?;
         if let Some(stored) = state
             .accounts
             .iter_mut()
-            .find(|account| account.id == record.id)
+            .find(|item| item.id == account.id)
         {
-            stored.oauth_token = record.oauth_token.clone();
-            stored.oauth_token_created_at = record.oauth_token_created_at;
-            *record = stored.clone();
+            stored.oauth_token = Some(token);
+            stored.oauth_token_created_at = Some(now_ts());
         }
         println!("{}", ui.setup_token_saved());
         Ok(())
@@ -453,62 +427,15 @@ impl ClaudeAdapter {
             }
         }
     }
-}
 
-fn run_setup_token_with_pty(claude_bin: &Path, profile_root: &Path) -> Result<Option<String>> {
-    let ui = core_ui::messages();
-    let pty_system = native_pty_system();
-    let pair = pty_system
-        .openpty(default_pty_size())
-        .context("failed to open PTY for claude setup-token")?;
-    let mut command = CommandBuilder::new(claude_bin.as_os_str());
-    command.arg("setup-token");
-    command.env("CLAUDE_CONFIG_DIR", profile_root.as_os_str());
-
-    let mut child = pair
-        .slave
-        .spawn_command(command)
-        .with_context(|| format!("failed to execute {}", claude_bin.display()))?;
-    drop(pair.slave);
-
-    let mut reader = pair
-        .master
-        .try_clone_reader()
-        .context("failed to read claude setup-token PTY")?;
-    let mut stdout = io::stdout();
-    let mut buffer = [0u8; 4096];
-    let mut captured = String::new();
-    let mut token = None;
-
-    loop {
-        match reader.read(&mut buffer) {
-            Ok(0) => break,
-            Ok(n) => {
-                stdout
-                    .write_all(&buffer[..n])
-                    .context("failed to forward claude setup-token output")?;
-                stdout
-                    .flush()
-                    .context("failed to flush claude setup-token output")?;
-                let chunk = String::from_utf8_lossy(&buffer[..n]);
-                captured.push_str(&chunk);
-                if token.is_none() {
-                    token = extract_setup_token(&captured);
-                }
-            }
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-            Err(error) => return Err(error).context("failed to read claude setup-token output"),
-        }
+    pub fn current_api_account<'a>(&self, state: &'a State) -> Option<&'a AccountRecord> {
+        let current_id = state.current_account_id.as_ref()?;
+        let account = state
+            .accounts
+            .iter()
+            .find(|account| &account.id == current_id)?;
+        (account.account_kind.as_deref() == Some("api")).then_some(account)
     }
-
-    let status = child
-        .wait()
-        .context("failed to wait for claude setup-token")?;
-    if !status.success() {
-        bail!("{}", ui.setup_token_failed(status.exit_code() as i32));
-    }
-
-    Ok(token)
 }
 
 fn read_setup_token_from_stdin() -> Result<String> {
@@ -526,38 +453,16 @@ fn read_setup_token_from_stdin() -> Result<String> {
     Ok(token.to_string())
 }
 
-fn extract_setup_token(output: &str) -> Option<String> {
-    let start = output.find("sk-ant-oat")?;
-    let token = output[start..]
-        .chars()
-        .take_while(|ch| ch.is_ascii_graphic())
-        .collect::<String>()
-        .trim_end_matches(|ch: char| matches!(ch, '.' | ',' | ';' | ':' | ')' | ']' | '}'))
-        .to_string();
-    if is_valid_setup_token(&token) {
-        Some(token)
-    } else {
-        None
-    }
+fn build_oauth_login_command(claude_bin: &Path, profile_root: &Path) -> Command {
+    let mut command = Command::new(claude_bin);
+    command
+        .args(["auth", "login", "--claudeai"])
+        .env("CLAUDE_CONFIG_DIR", profile_root);
+    command
 }
 
 fn is_valid_setup_token(token: &str) -> bool {
     token.starts_with("sk-ant-oat") && token.len() >= 24 && !token.contains("...")
-}
-
-fn default_pty_size() -> PtySize {
-    PtySize {
-        rows: env::var("LINES")
-            .ok()
-            .and_then(|value| value.parse().ok())
-            .unwrap_or(24),
-        cols: env::var("COLUMNS")
-            .ok()
-            .and_then(|value| value.parse().ok())
-            .unwrap_or(80),
-        pixel_width: 0,
-        pixel_height: 0,
-    }
 }
 
 fn apply_claude_runtime_env(
@@ -803,7 +708,7 @@ fn invoked_model_alias() -> Option<&'static str> {
     }
 }
 
-fn now_ts() -> i64 {
+pub(crate) fn now_ts() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs() as i64)
@@ -824,8 +729,8 @@ mod tests {
     use std::process::Command;
 
     use super::{
-        apply_claude_runtime_env, build_claude_launch_command, contains_resume_flag,
-        extract_setup_token, parse_yes_no,
+        apply_claude_runtime_env, build_claude_launch_command, build_oauth_login_command,
+        contains_resume_flag, parse_yes_no,
     };
     use crate::adapters::claude::ClaudeAdapter;
     use crate::core::state::AccountRecord;
@@ -852,6 +757,21 @@ mod tests {
         assert_eq!(parse_yes_no("y"), Some(true));
         assert_eq!(parse_yes_no("NO"), Some(false));
         assert_eq!(parse_yes_no("maybe"), None);
+    }
+
+    #[test]
+    fn oauth_login_command_does_not_forward_email_hint() {
+        let command = build_oauth_login_command(
+            Path::new("/usr/bin/claude"),
+            Path::new("/tmp/sclaude-login"),
+        );
+        let args = command
+            .get_args()
+            .map(|item| item.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert_eq!(args, vec!["auth", "login", "--claudeai"]);
+        assert!(!args.iter().any(|item| item == "--email"));
     }
 
     #[test]
@@ -977,25 +897,6 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(state_dir);
-    }
-
-    #[test]
-    fn setup_token_extraction_reads_real_token_from_tui_output() {
-        let output = "\u{1b}[32mAuthentication token created successfully!\u{1b}[0m\r\n\
-            sk-ant-oat-real-token-abcdef123456\r\n";
-
-        assert_eq!(
-            extract_setup_token(output).as_deref(),
-            Some("sk-ant-oat-real-token-abcdef123456")
-        );
-    }
-
-    #[test]
-    fn setup_token_extraction_ignores_placeholder() {
-        assert_eq!(
-            extract_setup_token("Copy the sk-ant-oat... token from Claude"),
-            None
-        );
     }
 
     fn command_envs(command: &Command) -> BTreeMap<String, Option<String>> {

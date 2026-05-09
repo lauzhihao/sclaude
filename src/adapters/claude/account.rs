@@ -179,12 +179,12 @@ impl ClaudeAdapter {
     }
 
     pub fn switch_account(&self, account: &AccountRecord) -> Result<()> {
+        materialize_account_credentials(account)?;
+        storage::ensure_exists(Path::new(&account.auth_path), "managed Claude profile")?;
         if account_has_oauth_token(account) {
             ensure_oauth_token_profile(&profile_root_for_account(account))?;
             return Ok(());
         }
-        materialize_account_credentials(account)?;
-        storage::ensure_exists(Path::new(&account.auth_path), "managed Claude profile")?;
         if account.account_kind.as_deref() == Some("api") {
             ensure_api_key_profile(&profile_root_for_account(account))?;
         }
@@ -452,6 +452,45 @@ mod tests {
             Some("sk-ant-oat-preservedabcdef")
         );
         assert_eq!(state.accounts[0].oauth_token_created_at, Some(123));
+        Ok(())
+    }
+
+    #[test]
+    fn switch_account_restores_oauth_bundle_even_when_oauth_token_present() -> Result<()> {
+        let tmp = std::env::temp_dir().join(format!("sclaude-oauth-switch-{}", Uuid::new_v4()));
+        let state_dir = tmp.join("state");
+        let profile_root = state_dir.join("accounts").join("acct-oauth");
+        fs::create_dir_all(&profile_root)?;
+        fs::write(
+            profile_root.join(".credential-bundle.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "auth_json": [123, 34, 117, 115, 101, 114, 73, 68, 34, 58, 34, 97, 99, 99, 116, 45, 111, 97, 117, 116, 104, 34, 125],
+                "credentials_json": [123, 34, 99, 108, 97, 117, 100, 101, 65, 105, 79, 97, 117, 116, 104, 34, 58, 123, 34, 97, 99, 99, 101, 115, 115, 84, 111, 107, 101, 110, 34, 58, 34, 115, 107, 45, 108, 105, 118, 101, 45, 111, 97, 117, 116, 104, 34, 125, 125]
+            }))?,
+        )?;
+        let account = AccountRecord {
+            id: "acct-oauth".into(),
+            email: "oauth@example.com".into(),
+            account_kind: Some("oauth".into()),
+            auth_path: profile_root.join(".claude.json").to_string_lossy().into_owned(),
+            config_path: Some(profile_root.to_string_lossy().into_owned()),
+            credential_bundle_key: Some("claude-bundle-acct-oauth".into()),
+            oauth_token: Some("sk-ant-oat-exampleabcdef".into()),
+            ..AccountRecord::default()
+        };
+
+        ClaudeAdapter.switch_account(&account)?;
+
+        let auth: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(profile_root.join(".claude.json"))?)?;
+        let creds: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(profile_root.join(".credentials.json"))?)?;
+        assert_eq!(auth.get("userID").and_then(|v| v.as_str()), Some("acct-oauth"));
+        assert_eq!(
+            creds["claudeAiOauth"]["accessToken"].as_str(),
+            Some("sk-live-oauth")
+        );
+        let _ = fs::remove_dir_all(&tmp);
         Ok(())
     }
 

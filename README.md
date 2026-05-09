@@ -75,7 +75,9 @@ cargo build --release
 
 All runtime entrypoints launch Claude with:
 
+- a local-account-first flow: use a usable local account when one exists, and only fall back to `pull` when no local usable account exists
 - `CLAUDE_CONFIG_DIR` pointing at the selected managed profile
+- `CLAUDE_CODE_OAUTH_TOKEN` injected for official OAuth token accounts
 - `IS_SANDBOX=1`
 - `--dangerously-skip-permissions` unless you already passed it
 
@@ -88,7 +90,8 @@ All runtime entrypoints launch Claude with:
 | `sclaude auto` | Pick the best account without launching Claude |
 | `sclaude login` | Add one account through official OAuth or API credentials, then switch to it |
 | `sclaude add` | Add one account through the same login flow as `login`; switch only when `--switch` is passed |
-| `sclaude push <repo>` | Encrypt and push the full local account pool into a Git repository |
+| `sclaude set-token` | Explicitly run `claude setup-token` for the selected account and save the pasted long-lived token |
+| `sclaude push <repo>` | By default, push only official OAuth token accounts that are safe to reuse remotely; pass `--all` to push the full local account pool |
 | `sclaude pull <repo>` | Pull and decrypt an account pool from a Git repository, then overwrite local state |
 | `sclaude use <label>` | Switch directly to a known account by the label shown in `list` |
 | `sclaude rm <label>` | Remove a stored account by the label shown in `list` |
@@ -105,16 +108,15 @@ All runtime entrypoints launch Claude with:
 ```bash
 sclaude login
 sclaude login --oauth
-sclaude login --oauth --username you@example.com
 ```
 
 Actual behavior:
 
 - runs `claude auth login --claudeai` in a temporary managed profile
-- after OAuth login, runs `claude setup-token` in a PTY and tries to extract the printed `sk-ant-oat...` token automatically
-- if automatic extraction fails, `sclaude` falls back to prompting you to paste the token manually
-- stores the OAuth token and its creation time in local state so launches can use `CLAUDE_CODE_OAUTH_TOKEN`
-- `--username` is only an email hint passed to Claude
+- `login` only completes the official Claude OAuth login and no longer runs `claude setup-token` automatically
+- when you need a long-lived token, run `sclaude set-token` manually after login
+- stored OAuth tokens are injected later through `CLAUDE_CODE_OAUTH_TOKEN`
+- avoid `--username` in the OAuth code-entry flow
 - `--password` is kept only for compatibility and is currently ignored
 - after a successful login, `sclaude login` always switches to the imported account
 
@@ -145,7 +147,18 @@ Actual behavior:
 
 - uses the same login flow and options as `sclaude login`
 - unlike `login`, it switches to the new account only when `--switch` is passed
-- OAuth `add` also runs `claude setup-token` and stores the pasted token
+- OAuth `add` also stops after the web login; run `sclaude set-token` later when you need a long-lived token
+
+### `set-token`
+
+```bash
+sclaude set-token
+```
+
+- runs `claude setup-token` for the currently selected account
+- uses the current terminal directly instead of wrapping the flow in a PTY
+- after Claude prints the long-lived token, paste the `sk-ant-oat...` value when prompted
+- only accounts with a saved long-lived token are exported by default in `push`
 
 ## Command Details
 
@@ -237,11 +250,12 @@ sclaude import-known
 
 ```bash
 export SCLAUDE_POOL_KEY='replace-with-a-long-random-secret'
-sclaude push [-i <identity_file>] [--path <repo_path>] [repo]
+sclaude push [--all] [-i <identity_file>] [--path <repo_path>] [repo]
 ```
 
 - clones the repository with your existing Git credentials
-- exports account metadata and stored OAuth tokens as an encrypted bundle
+- by default, exports only official OAuth accounts that already have a saved `setup-token`, so remote hosts receive only reusable accounts
+- pass `--all` to export the full local account pool
 - stores the bundle under `.sclaude-account-pool/bundle.enc.json` by default
 - only pushes when the encrypted bundle changed
 - when `[repo]` is explicitly provided once, `sclaude` remembers it under `$SCLAUDE_HOME/repo-sync.json`
@@ -261,6 +275,7 @@ sclaude pull [-i <identity_file>] [--path <repo_path>] [repo]
 - force-overwrites the local managed account pool instead of merging
 - token-only accounts are restored as minimal local Claude profiles and launched with `CLAUDE_CODE_OAUTH_TOKEN`
 - when `[repo]` is omitted, `sclaude` uses `SCLAUDE_POOL_REPO` first, then the saved repo from `$SCLAUDE_HOME`
+- later `sclaude`, `opus`, `sonnet`, and `haiku` launches try usable local accounts first and only come back to `pull` when no local usable account remains
 - refreshes account usage after import and prints the latest table
 
 ### `update`

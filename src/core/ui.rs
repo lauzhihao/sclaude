@@ -87,9 +87,9 @@ impl Messages {
 
     pub fn no_usable_account_hint(&self) -> &'static str {
         if self.is_zh() {
-            "没有可用账号，请先执行 `sclaude add` 添加一个账号。"
+            "没有可用账号，请先执行 `sclaude add` 或 `sclaude login`。"
         } else {
-            "No usable accounts found. Run `sclaude add` to add one first."
+            "No usable accounts found. Run `sclaude add` or `sclaude login` first."
         }
     }
 
@@ -379,6 +379,14 @@ impl Messages {
             format!("claude 登录失败，退出码：{status}")
         } else {
             format!("claude auth login failed with status {status}")
+        }
+    }
+
+    pub fn claude_login_retry_without_username(&self) -> &'static str {
+        if self.is_zh() {
+            "如果你刚才带了 `--username`，请先去掉它再重试一次 OAuth 登录。"
+        } else {
+            "If you passed `--username`, retry the OAuth login once without it."
         }
     }
 

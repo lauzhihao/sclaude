@@ -12,6 +12,8 @@ use crate::core::storage;
 use crate::core::ui;
 use crate::core::update;
 
+const REPO_SYNC_REPO_ENV: &str = "SCLAUDE_POOL_REPO";
+
 #[derive(Debug, Parser)]
 #[command(name = "sclaude")]
 pub struct Cli {
@@ -28,6 +30,7 @@ pub enum Command {
     Auto(AutoArgs),
     Add(AddArgs),
     Login(LoginArgs),
+    SetToken,
     Push(RepoSyncArgs),
     Pull(RepoSyncArgs),
     Use(UseArgs),
@@ -110,6 +113,9 @@ pub struct RepoSyncArgs {
     #[arg(short = 'i', value_name = "IDENTITY_FILE")]
     pub identity_file: Option<PathBuf>,
 
+    #[arg(long)]
+    pub all: bool,
+
     pub repo: Option<String>,
 }
 
@@ -135,8 +141,6 @@ pub struct UpdateArgs {
 pub struct ImportAuthArgs {
     pub path: PathBuf,
 }
-
-const REPO_SYNC_REPO_ENV: &str = "SCLAUDE_POOL_REPO";
 
 impl Cli {
     pub fn parse_args() -> Self {
@@ -165,14 +169,15 @@ pub fn run(cli: Cli) -> Result<i32> {
 
     let exit_code = match command {
         Command::Launch(args) => {
-            match adapter.ensure_best_account(
+            match ensure_launch_account(
+                &adapter,
                 &state_dir,
                 &mut state,
                 args.no_import_known,
                 args.no_login,
                 !args.dry_run,
             )? {
-                Some((account, usage)) => {
+                Some((account, usage, _pulled)) => {
                     if args.dry_run {
                         print_selection(ui.selection_would_select(), &account, &usage);
                         storage::save_state(&state_dir, &state)?;
@@ -193,21 +198,22 @@ pub fn run(cli: Cli) -> Result<i32> {
                     }
                 }
                 None => {
-                    println!("{}", ui.no_usable_account());
+                    println!("{}", ui.no_usable_account_hint());
                     storage::save_state(&state_dir, &state)?;
                     1
                 }
             }
         }
         Command::Auto(args) => {
-            match adapter.ensure_best_account(
+            match ensure_launch_account(
+                &adapter,
                 &state_dir,
                 &mut state,
                 args.no_import_known,
                 args.no_login,
                 !args.dry_run,
             )? {
-                Some((account, usage)) => {
+                Some((account, usage, _pulled)) => {
                     if args.dry_run {
                         print_selection(ui.selection_would_select(), &account, &usage);
                     } else {
@@ -217,7 +223,7 @@ pub fn run(cli: Cli) -> Result<i32> {
                     0
                 }
                 None => {
-                    println!("{}", ui.no_usable_account());
+                    println!("{}", ui.no_usable_account_hint());
                     storage::save_state(&state_dir, &state)?;
                     1
                 }
@@ -232,6 +238,23 @@ pub fn run(cli: Cli) -> Result<i32> {
             state.current_account_id = Some(record.id.clone());
             print_selection(ui.selection_switched(), &record, &usage);
             storage::save_state(&state_dir, &state)?;
+            0
+        }
+        Command::SetToken => {
+            adapter.import_known_sources(&state_dir, &mut state);
+            if adapter.current_api_account(&state).is_some() {
+                state.current_account_id = None;
+            }
+            let Some((account, _usage, _pulled)) =
+                ensure_launch_account(&adapter, &state_dir, &mut state, false, true, true)?
+            else {
+                println!("{}", ui.no_usable_account_hint());
+                storage::save_state(&state_dir, &state)?;
+                return Ok(1);
+            };
+            adapter.run_setup_token(&state_dir, &mut state, &account)?;
+            storage::save_state(&state_dir, &state)?;
+            println!("{}", ui.added_account(&account.email));
             0
         }
         Command::Add(args) => {
@@ -309,6 +332,7 @@ pub fn run(cli: Cli) -> Result<i32> {
                 &repo,
                 args.path.as_deref(),
                 args.identity_file.as_deref(),
+                args.all,
             )?;
             if outcome.changed {
                 println!(
@@ -409,14 +433,14 @@ pub fn run(cli: Cli) -> Result<i32> {
             0
         }
         Command::Passthrough(args) => {
-            match adapter.ensure_best_account(&state_dir, &mut state, false, false, true)? {
-                Some((account, usage)) => {
+            match ensure_launch_account(&adapter, &state_dir, &mut state, false, false, true)? {
+                Some((account, usage, _pulled)) => {
                     print_selection(ui.selection_switched(), &account, &usage);
                     storage::save_state(&state_dir, &state)?;
                     adapter.run_passthrough(&state_dir, &account, &args)?
                 }
                 None => {
-                    println!("{}", ui.no_usable_account());
+                    println!("{}", ui.no_usable_account_hint());
                     storage::save_state(&state_dir, &state)?;
                     1
                 }
@@ -526,6 +550,49 @@ fn persist_repo_sync_repo(state_dir: &Path, repo: &str) -> Result<()> {
     storage::save_repo_sync_config(state_dir, &config)
 }
 
+fn ensure_launch_account(
+    adapter: &ClaudeAdapter,
+    state_dir: &Path,
+    state: &mut crate::core::state::State,
+    no_import_known: bool,
+    no_login: bool,
+    perform_switch: bool,
+) -> Result<Option<(AccountRecord, UsageSnapshot, bool)>> {
+    let mut pulled = false;
+    if let Some((account, usage)) = adapter.ensure_best_account(state_dir, state, no_import_known, no_login, perform_switch)? {
+        return Ok(Some((account, usage, pulled)));
+    }
+
+    if !no_import_known {
+        adapter.import_known_sources(state_dir, state);
+    }
+    if let Some(repo) = repo_sync_repo_for_pull(state_dir)? {
+        adapter.pull_account_pool(state_dir, state, &repo, None, None)?;
+        pulled = true;
+        if let Some((account, usage)) =
+            adapter.ensure_best_account(state_dir, state, true, no_login, perform_switch)?
+        {
+            return Ok(Some((account, usage, pulled)));
+        }
+    }
+
+    Ok(None)
+}
+
+fn repo_sync_repo_for_pull(state_dir: &Path) -> Result<Option<String>> {
+    let env_repo = env::var(REPO_SYNC_REPO_ENV).ok();
+    let config = storage::load_repo_sync_config(state_dir)?;
+    let repo =
+        resolve_repo_sync_repo_source(None, env_repo.as_deref(), config.last_repo.as_deref())
+            .map(ToOwned::to_owned);
+    let has_key = env::var("SCLAUDE_POOL_KEY")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .is_some();
+    Ok(repo.filter(|_| has_key))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HelpTopic {
     Root,
@@ -533,6 +600,7 @@ enum HelpTopic {
     Auto,
     Add,
     Login,
+    SetToken,
     Push,
     Pull,
     Use,
@@ -581,6 +649,7 @@ fn command_help_topic(name: &str) -> Option<HelpTopic> {
         "auto" => Some(HelpTopic::Auto),
         "add" => Some(HelpTopic::Add),
         "login" => Some(HelpTopic::Login),
+        "set-token" => Some(HelpTopic::SetToken),
         "push" => Some(HelpTopic::Push),
         "pull" => Some(HelpTopic::Pull),
         "use" => Some(HelpTopic::Use),
@@ -631,6 +700,11 @@ fn render_help_en(topic: HelpTopic) -> String {
             writeln!(
                 &mut out,
                 "  login        Add one account through OAuth or API credentials"
+            )
+            .unwrap();
+            writeln!(
+                &mut out,
+                "  set-token    Run `claude setup-token` for the selected account"
             )
             .unwrap();
             writeln!(
@@ -835,6 +909,19 @@ fn render_help_en(topic: HelpTopic) -> String {
             .unwrap();
             writeln!(&mut out, "  -h, --help                 Print help").unwrap();
         }
+        HelpTopic::SetToken => {
+            writeln!(&mut out, "Usage:").unwrap();
+            writeln!(&mut out, "  sclaude set-token").unwrap();
+            writeln!(&mut out).unwrap();
+            writeln!(
+                &mut out,
+                "Runs `claude setup-token` for the selected account and then saves the pasted OAuth token."
+            )
+            .unwrap();
+            writeln!(&mut out).unwrap();
+            writeln!(&mut out, "Options:").unwrap();
+            writeln!(&mut out, "  -h, --help  Print help").unwrap();
+        }
         HelpTopic::Push => {
             writeln!(&mut out, "Usage:").unwrap();
             writeln!(&mut out, "  sclaude push [OPTIONS] [REPO]").unwrap();
@@ -850,6 +937,11 @@ fn render_help_en(topic: HelpTopic) -> String {
             writeln!(
                 &mut out,
                 "      --path <REPO_PATH>  Repository subdirectory used for the account pool"
+            )
+            .unwrap();
+            writeln!(
+                &mut out,
+                "      --all               Export all local accounts instead of only reusable OAuth token accounts"
             )
             .unwrap();
             writeln!(
@@ -1018,6 +1110,11 @@ fn render_help_zh(topic: HelpTopic) -> String {
                 "  login        通过 OAuth 或 API 凭据新增一个账号"
             )
             .unwrap();
+            writeln!(
+                &mut out,
+                "  set-token    为当前选中账号执行 `claude setup-token`"
+            )
+            .unwrap();
             writeln!(&mut out, "  push         把本地账号池推送到 Git 仓库").unwrap();
             writeln!(&mut out, "  pull         从 Git 仓库拉取账号池").unwrap();
             writeln!(&mut out, "  use          按 `list` 中显示的标识切换账号").unwrap();
@@ -1168,6 +1265,19 @@ fn render_help_zh(topic: HelpTopic) -> String {
             .unwrap();
             writeln!(&mut out, "  -h, --help                 显示帮助").unwrap();
         }
+        HelpTopic::SetToken => {
+            writeln!(&mut out, "用法：").unwrap();
+            writeln!(&mut out, "  sclaude set-token").unwrap();
+            writeln!(&mut out).unwrap();
+            writeln!(
+                &mut out,
+                "为当前选中的账号执行 `claude setup-token`，然后保存你手动粘贴的 OAuth token。"
+            )
+            .unwrap();
+            writeln!(&mut out).unwrap();
+            writeln!(&mut out, "选项：").unwrap();
+            writeln!(&mut out, "  -h, --help  显示帮助").unwrap();
+        }
         HelpTopic::Push => {
             writeln!(&mut out, "用法：").unwrap();
             writeln!(&mut out, "  sclaude push [选项] [REPO]").unwrap();
@@ -1183,6 +1293,11 @@ fn render_help_zh(topic: HelpTopic) -> String {
             writeln!(
                 &mut out,
                 "      --path <REPO_PATH>  仓库内用于保存账号池的子目录"
+            )
+            .unwrap();
+            writeln!(
+                &mut out,
+                "      --all               导出完整本地账号池，而不是只导出可远端复用的 OAuth token 账号"
             )
             .unwrap();
             writeln!(
@@ -1317,7 +1432,7 @@ fn render_help_zh(topic: HelpTopic) -> String {
 mod tests {
     use std::fs;
 
-    use super::{persist_repo_sync_repo, resolve_repo_sync_repo_source};
+    use super::{persist_repo_sync_repo, repo_sync_repo_for_pull, resolve_repo_sync_repo_source};
     use crate::core::storage;
 
     #[test]
@@ -1348,6 +1463,38 @@ mod tests {
             config.last_repo.as_deref(),
             Some("git@github.com:org/repo.git")
         );
+        let _ = fs::remove_dir_all(&state_dir);
+    }
+
+    #[test]
+    fn repo_sync_repo_for_pull_requires_repo_and_key() {
+        let state_dir = std::env::temp_dir().join(format!("sclaude-pull-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&state_dir).expect("create temp dir");
+
+        // 这些测试会临时改进程环境变量，作用域被限定在单个测试里。
+        unsafe {
+            std::env::remove_var("SCLAUDE_POOL_REPO");
+            std::env::remove_var("SCLAUDE_POOL_KEY");
+        }
+        assert!(repo_sync_repo_for_pull(&state_dir).expect("repo").is_none());
+
+        unsafe {
+            std::env::set_var("SCLAUDE_POOL_REPO", "git@github.com:org/repo.git");
+        }
+        assert!(repo_sync_repo_for_pull(&state_dir).expect("repo").is_none());
+
+        unsafe {
+            std::env::set_var("SCLAUDE_POOL_KEY", "secret");
+        }
+        assert_eq!(
+            repo_sync_repo_for_pull(&state_dir).expect("repo").as_deref(),
+            Some("git@github.com:org/repo.git")
+        );
+
+        unsafe {
+            std::env::remove_var("SCLAUDE_POOL_REPO");
+            std::env::remove_var("SCLAUDE_POOL_KEY");
+        }
         let _ = fs::remove_dir_all(&state_dir);
     }
 }

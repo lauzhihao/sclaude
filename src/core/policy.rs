@@ -16,10 +16,12 @@ pub fn choose_best_account(state: &State) -> Option<&AccountRecord> {
         .collect::<Vec<_>>();
 
     candidates.sort_by(|left, right| {
-        right
-            .updated_at
-            .cmp(&left.updated_at)
-            .then(left.email.cmp(&right.email))
+        compare_usage_priority(
+            state.usage_cache.get(&left.id),
+            state.usage_cache.get(&right.id),
+        )
+        .then(right.updated_at.cmp(&left.updated_at))
+        .then(left.email.cmp(&right.email))
     });
     candidates.into_iter().next()
 }
@@ -67,6 +69,29 @@ fn account_is_usable(usage: &UsageSnapshot) -> bool {
     !usage.needs_relogin && usage.last_sync_error.is_none()
 }
 
+fn compare_usage_priority(
+    left: Option<&UsageSnapshot>,
+    right: Option<&UsageSnapshot>,
+) -> std::cmp::Ordering {
+    let left_five = left
+        .and_then(|usage| usage.five_hour_remaining_percent)
+        .unwrap_or(-1);
+    let right_five = right
+        .and_then(|usage| usage.five_hour_remaining_percent)
+        .unwrap_or(-1);
+    right_five
+        .cmp(&left_five)
+        .then_with(|| {
+            let left_weekly = left
+                .and_then(|usage| usage.weekly_remaining_percent)
+                .unwrap_or(-1);
+            let right_weekly = right
+                .and_then(|usage| usage.weekly_remaining_percent)
+                .unwrap_or(-1);
+            right_weekly.cmp(&left_weekly)
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -102,7 +127,7 @@ mod tests {
     }
 
     #[test]
-    fn best_account_prefers_recent_update() {
+    fn best_account_prefers_higher_quota_before_recent_update() {
         let state = State {
             version: 1,
             current_account_id: None,
@@ -120,11 +145,28 @@ mod tests {
                     ..AccountRecord::default()
                 },
             ],
-            usage_cache: BTreeMap::default(),
+            usage_cache: BTreeMap::from([
+                (
+                    "older".into(),
+                    UsageSnapshot {
+                        five_hour_remaining_percent: Some(80),
+                        weekly_remaining_percent: Some(70),
+                        ..UsageSnapshot::default()
+                    },
+                ),
+                (
+                    "newer".into(),
+                    UsageSnapshot {
+                        five_hour_remaining_percent: Some(20),
+                        weekly_remaining_percent: Some(90),
+                        ..UsageSnapshot::default()
+                    },
+                ),
+            ]),
         };
 
         let best = choose_best_account(&state).expect("best");
-        assert_eq!(best.id, "newer");
+        assert_eq!(best.id, "older");
     }
 
     #[test]

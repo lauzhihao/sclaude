@@ -75,7 +75,9 @@ cargo build --release
 
 所有运行时入口都会以这些方式启动 Claude：
 
+- 会先检查本地是否已有可用账号；只有本地没有可用账号时，才会尝试从配置好的账号池仓库执行 `pull`
 - 把 `CLAUDE_CONFIG_DIR` 指向选中的受管账号目录
+- 对官方 OAuth token 账号注入 `CLAUDE_CODE_OAUTH_TOKEN`
 - 设置 `IS_SANDBOX=1`
 - 如果你没自己传，则自动补 `--dangerously-skip-permissions`
 
@@ -88,7 +90,8 @@ cargo build --release
 | `sclaude auto` | 只选择最佳账号，不启动 Claude |
 | `sclaude login` | 通过官方 OAuth 或 API 凭据添加一个账号，并立即切换过去 |
 | `sclaude add` | 用和 `login` 相同的流程添加账号；只有传了 `--switch` 才会切换 |
-| `sclaude push <repo>` | 把完整本地账号池加密后推送到 Git 仓库 |
+| `sclaude set-token` | 为当前选中的账号显式执行 `claude setup-token`，并保存手动粘贴的 1 年 token |
+| `sclaude push <repo>` | 默认只推送适合远端复用的官方 OAuth token 账号；传 `--all` 才推送完整本地账号池 |
 | `sclaude pull <repo>` | 从 Git 仓库拉取并解密账号池，然后覆盖本地状态 |
 | `sclaude use <label>` | 按 `list` 中显示的账号标识直接切换 |
 | `sclaude rm <label>` | 按 `list` 中显示的账号标识删除一个账号 |
@@ -105,16 +108,15 @@ cargo build --release
 ```bash
 sclaude login
 sclaude login --oauth
-sclaude login --oauth --username you@example.com
 ```
 
 实际行为：
 
 - 在临时受管目录里执行 `claude auth login --claudeai`
-- OAuth 登录完成后，会在 PTY 里继续执行 `claude setup-token`，并优先自动提取终端输出里的 `sk-ant-oat...` token
-- 如果自动提取失败，`sclaude` 才会回退为手动粘贴 token
-- 本地会记录 OAuth token 和创建时间，后续启动时通过 `CLAUDE_CODE_OAUTH_TOKEN` 注入
-- `--username` 只作为传给 Claude 的邮箱提示
+- `login` 只负责完成 Claude 官方登录，不再自动执行 `claude setup-token`
+- 需要 1 年 token 时，请在登录完成后手工执行 `sclaude set-token`
+- 本地已保存的 OAuth token 后续启动时会通过 `CLAUDE_CODE_OAUTH_TOKEN` 注入
+- OAuth code 回填模式下，不建议携带 `--username`
 - `--password` 仅为兼容保留，当前不会被使用
 - 登录成功后，`sclaude login` 总是会切换到新导入的账号
 
@@ -145,7 +147,18 @@ sclaude add --api --provider poe.com --ANTHROPIC_BASE_URL ... --ANTHROPIC_API_KE
 
 - 使用和 `sclaude login` 完全相同的登录参数与流程
 - 与 `login` 的区别只在于：`add` 只有在传入 `--switch` 时才会切换到新账号
-- OAuth `add` 同样会执行 `claude setup-token` 并保存粘贴的 token
+- OAuth `add` 同样只完成网页登录；需要 1 年 token 时，后续手工执行 `sclaude set-token`
+
+### `set-token`
+
+```bash
+sclaude set-token
+```
+
+- 对当前选中的账号执行 `claude setup-token`
+- `sclaude` 会直接继承当前终端交互，不再用 PTY 包一层
+- 在 Claude 输出 1 年 token 后，按提示手工粘贴 `sk-ant-oat...`
+- 保存成功后，后续 `push` 才会把这个账号当作可远端复用账号导出
 
 ## 命令细节
 
@@ -237,11 +250,12 @@ sclaude import-known
 
 ```bash
 export SCLAUDE_POOL_KEY='替换成足够长的随机 secret'
-sclaude push [-i <identity_file>] [--path <repo_path>] [repo]
+sclaude push [--all] [-i <identity_file>] [--path <repo_path>] [repo]
 ```
 
 - 使用你现有的 Git 凭据克隆仓库
-- 把账号 metadata 和已保存的 OAuth token 导出成加密 bundle
+- 默认只导出“官方 OAuth 且已经保存 `setup-token`”的账号，避免把不适合远端复用的本地账号一起分发
+- 传 `--all` 时，才导出完整本地账号池
 - 默认写到 `.sclaude-account-pool/bundle.enc.json`
 - 只有加密后的 bundle 发生变化时才会提交并推送
 - 首次显式传入 `[repo]` 后，`sclaude` 会把它记到 `$SCLAUDE_HOME/repo-sync.json`
@@ -261,6 +275,7 @@ sclaude pull [-i <identity_file>] [--path <repo_path>] [repo]
 - 直接覆盖本地受管账号池，不做 merge
 - token-only 账号会恢复成最小本地 Claude profile，启动时通过 `CLAUDE_CODE_OAUTH_TOKEN` 注入
 - 未传 `[repo]` 时，`sclaude` 会优先读取 `SCLAUDE_POOL_REPO`，再回退到 `$SCLAUDE_HOME` 中保存的仓库地址
+- 后续执行 `sclaude`、`opus`、`sonnet`、`haiku` 时，会先尝试使用本地可用账号；只有本地没有可用账号时，才会回退到这里重新 `pull`
 - 导入后会立刻刷新账号状态，并打印最新表格
 
 ### `update`

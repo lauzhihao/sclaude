@@ -36,9 +36,11 @@ impl ClaudeAdapter {
         repo: &str,
         bundle_dir: Option<&str>,
         identity_file: Option<&Path>,
+        include_all_accounts: bool,
     ) -> Result<PushOutcome> {
         let ui = core_ui::messages();
-        if state.accounts.is_empty() {
+        let export_state = build_repo_sync_state(state, include_all_accounts);
+        if export_state.accounts.is_empty() {
             bail!("{}", ui.repo_push_no_accounts());
         }
 
@@ -53,7 +55,7 @@ impl ClaudeAdapter {
         let checkout = clone_repo(&git_bin, state_dir, repo, identity_file)?;
         let bundle_root = checkout.checkout_dir.join(&bundle_dir);
         let bundle_path = bundle_root.join(BUNDLE_FILENAME);
-        let bundle = build_repo_bundle(state)?;
+        let bundle = build_repo_bundle(&export_state)?;
         let bundle_bytes = serde_json::to_vec(&bundle)?;
 
         println!("{}", ui.repo_push_start(repo));
@@ -62,7 +64,7 @@ impl ClaudeAdapter {
                 if existing == bundle_bytes {
                     return Ok(PushOutcome {
                         changed: false,
-                        exported_accounts: state.accounts.len(),
+                        exported_accounts: export_state.accounts.len(),
                     });
                 }
             }
@@ -76,7 +78,7 @@ impl ClaudeAdapter {
         if !git_has_changes(&git_bin, &checkout.checkout_dir, &bundle_dir)? {
             return Ok(PushOutcome {
                 changed: false,
-                exported_accounts: state.accounts.len(),
+                exported_accounts: export_state.accounts.len(),
             });
         }
 
@@ -85,7 +87,7 @@ impl ClaudeAdapter {
 
         Ok(PushOutcome {
             changed: true,
-            exported_accounts: state.accounts.len(),
+            exported_accounts: export_state.accounts.len(),
         })
     }
 
@@ -133,6 +135,46 @@ impl ClaudeAdapter {
             imported_accounts: state.accounts.len(),
         })
     }
+}
+
+fn build_repo_sync_state(state: &State, include_all_accounts: bool) -> State {
+    if include_all_accounts {
+        return state.clone();
+    }
+
+    let accounts = state
+        .accounts
+        .iter()
+        .filter(|account| is_pull_ready_oauth_account(account))
+        .cloned()
+        .collect::<Vec<_>>();
+    let usage_cache = state
+        .usage_cache
+        .iter()
+        .filter(|(id, _)| accounts.iter().any(|account| &account.id == *id))
+        .map(|(id, usage)| (id.clone(), usage.clone()))
+        .collect();
+    let current_account_id = state
+        .current_account_id
+        .as_ref()
+        .filter(|id| accounts.iter().any(|account| &account.id == *id))
+        .cloned();
+
+    State {
+        version: state.version,
+        accounts,
+        usage_cache,
+        current_account_id,
+    }
+}
+
+fn is_pull_ready_oauth_account(account: &AccountRecord) -> bool {
+    account.account_kind.as_deref() == Some("oauth")
+        && account
+            .oauth_token
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -737,7 +779,7 @@ mod tests {
     use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 
     use super::{
-        RepoBundle, RepoBundleAccount, RepoBundleFile, build_repo_bundle,
+        RepoBundle, RepoBundleAccount, RepoBundleFile, build_repo_bundle, build_repo_sync_state,
         overwrite_local_account_pool, resolve_bundle_dir, resolve_bundle_dir_source,
     };
     use crate::core::state::{AccountRecord, State};
@@ -994,5 +1036,39 @@ mod tests {
             Some(true)
         );
         Ok(())
+    }
+
+    #[test]
+    fn default_repo_export_filters_out_non_oauth_or_missing_token_accounts() {
+        let state = State {
+            accounts: vec![
+                AccountRecord {
+                    id: "oauth-ready".into(),
+                    email: "oauth-ready@example.com".into(),
+                    account_kind: Some("oauth".into()),
+                    oauth_token: Some("sk-ant-oat-readyabcdef".into()),
+                    ..Default::default()
+                },
+                AccountRecord {
+                    id: "oauth-missing-token".into(),
+                    email: "oauth-missing@example.com".into(),
+                    account_kind: Some("oauth".into()),
+                    ..Default::default()
+                },
+                AccountRecord {
+                    id: "api-account".into(),
+                    email: "api@example.com".into(),
+                    account_kind: Some("api".into()),
+                    oauth_token: Some("sk-ant-oat-ignoredabcdef".into()),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        let filtered = build_repo_sync_state(&state, false);
+
+        assert_eq!(filtered.accounts.len(), 1);
+        assert_eq!(filtered.accounts[0].id, "oauth-ready");
     }
 }
