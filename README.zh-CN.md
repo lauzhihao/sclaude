@@ -2,6 +2,8 @@
 
 [English](./README.md) | [简体中文](./README.zh-CN.md)
 
+顺手分享一个我用了很久的第三方中转服务，稳定、便宜、售后也非常赞：<https://codeproxy.dev/register?aff=48C6FEHD>
+
 `sclaude` 是一个基于 Rust 的 Claude Code CLI wrapper，用来做多账号管理、账号导入、加密账号池同步，以及模型固定入口。
 
 这个仓库只包含代码，不包含账号池数据、额度缓存、本地凭据或机器相关配置。

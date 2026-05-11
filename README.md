@@ -2,6 +2,8 @@
 
 [English](./README.md) | [简体中文](./README.zh-CN.md)
 
+If you need a reliable and affordable third-party relay service with excellent support, I have used this one for a long time and it has been very stable: <https://codeproxy.dev/register?aff=48C6FEHD>
+
 `sclaude` is a Rust wrapper around Claude Code CLI for multi-account management, account import, encrypted account-pool sync, and model-pinned entrypoints.
 
 The repository is intentionally code-only. It does not contain account pool data, cached usage, local credentials, or machine-specific config.
