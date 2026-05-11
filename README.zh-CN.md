@@ -158,7 +158,9 @@ sclaude set-token
 ```
 
 - 对当前选中的账号执行 `claude setup-token`
+- 只使用本地已经存在的 OAuth 账号，不会自动 `pull`
 - `sclaude` 会直接继承当前终端交互，不再用 PTY 包一层
+- 不会把 email 透传给 `claude setup-token`；Claude 网页里的 code/token 归属的是当前 Claude 登录会话
 - 在 Claude 输出 1 年 token 后，按提示手工粘贴 `sk-ant-oat...`
 - 保存成功后，后续 `push` 才会把这个账号当作可远端复用账号导出
 

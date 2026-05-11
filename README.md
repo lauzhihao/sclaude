@@ -158,7 +158,9 @@ sclaude set-token
 ```
 
 - runs `claude setup-token` for the currently selected account
+- uses only an already existing local OAuth account and never auto-`pull`s
 - uses the current terminal directly instead of wrapping the flow in a PTY
+- does not forward any email to `claude setup-token`; the code/token from the Claude web page belongs to the current Claude login session
 - after Claude prints the long-lived token, paste the `sk-ant-oat...` value when prompted
 - only accounts with a saved long-lived token are exported by default in `push`
 
