@@ -245,8 +245,8 @@ pub fn run(cli: Cli) -> Result<i32> {
             if adapter.current_api_account(&state).is_some() {
                 state.current_account_id = None;
             }
-            let Some((account, _usage, _pulled)) =
-                ensure_launch_account(&adapter, &state_dir, &mut state, false, true, true)?
+            let Some(account) =
+                adapter.select_local_oauth_account(&state_dir, &mut state, false)?
             else {
                 println!("{}", ui.no_usable_account_hint());
                 storage::save_state(&state_dir, &state)?;

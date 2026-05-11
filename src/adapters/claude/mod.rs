@@ -181,6 +181,47 @@ impl ClaudeAdapter {
         Ok(None)
     }
 
+    pub fn select_local_oauth_account(
+        &self,
+        state_dir: &Path,
+        state: &mut State,
+        no_import_known: bool,
+    ) -> Result<Option<AccountRecord>> {
+        if !no_import_known {
+            self.import_known_sources(state_dir, state);
+        }
+
+        if state.accounts.is_empty() {
+            return Ok(None);
+        }
+
+        if let Some(current) = state
+            .current_account_id
+            .as_ref()
+            .and_then(|id| state.accounts.iter().find(|account| &account.id == id))
+            .filter(|account| account.account_kind.as_deref() == Some("oauth"))
+            .cloned()
+        {
+            self.switch_account(&current)?;
+            state.current_account_id = Some(current.id.clone());
+            return Ok(Some(current));
+        }
+
+        if let Some(best) = state
+            .accounts
+            .iter()
+            .filter(|account| account.account_kind.as_deref() == Some("oauth"))
+            .max_by_key(|account| account.updated_at)
+            .cloned()
+        {
+            self.switch_account(&best)?;
+            state.current_account_id = Some(best.id.clone());
+            return Ok(Some(best));
+        }
+
+        Ok(None)
+    }
+
     pub fn run_interactive_login(
         &self,
         state_dir: &Path,
@@ -772,6 +813,52 @@ mod tests {
 
         assert_eq!(args, vec!["auth", "login", "--claudeai"]);
         assert!(!args.iter().any(|item| item == "--email"));
+    }
+
+    #[test]
+    fn select_local_oauth_account_ignores_api_current_account() {
+        let state_dir = temp_profile_root("sclaude-select-oauth");
+        fs::create_dir_all(&state_dir).unwrap();
+        let oauth_profile = state_dir.join("accounts").join("oauth-1");
+        fs::create_dir_all(&oauth_profile).unwrap();
+        fs::write(
+            oauth_profile.join(".claude.json"),
+            r#"{"userID":"oauth-1","hasCompletedOnboarding":true}"#,
+        )
+        .unwrap();
+
+        let mut state = State {
+            current_account_id: Some("api-1".into()),
+            accounts: vec![
+                AccountRecord {
+                    id: "api-1".into(),
+                    email: "api@example.com".into(),
+                    account_kind: Some("api".into()),
+                    ..Default::default()
+                },
+                AccountRecord {
+                    id: "oauth-1".into(),
+                    email: "oauth@example.com".into(),
+                    account_kind: Some("oauth".into()),
+                    auth_path: oauth_profile.join(".claude.json").to_string_lossy().into_owned(),
+                    config_path: Some(oauth_profile.to_string_lossy().into_owned()),
+                    ..Default::default()
+                },
+            ],
+            usage_cache: BTreeMap::from([
+                ("api-1".into(), crate::core::state::UsageSnapshot::default()),
+                ("oauth-1".into(), crate::core::state::UsageSnapshot::default()),
+            ]),
+            ..Default::default()
+        };
+
+        let selected = ClaudeAdapter
+            .select_local_oauth_account(&state_dir, &mut state, true)
+            .unwrap()
+            .expect("oauth account");
+
+        assert_eq!(selected.id, "oauth-1");
+        let _ = fs::remove_dir_all(&state_dir);
     }
 
     #[test]
