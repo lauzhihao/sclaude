@@ -2,8 +2,6 @@
 
 [English](./README.md) | [简体中文](./README.zh-CN.md)
 
-If you need a reliable and affordable third-party relay service with excellent support, I have used this one for a long time and it has been very stable: <https://codeproxy.dev/register?aff=48C6FEHD>
-
 `sclaude` is a Rust wrapper around Claude Code CLI for multi-account management, account import, encrypted account-pool sync, and model-pinned entrypoints.
 
 The repository is intentionally code-only. It does not contain account pool data, cached usage, local credentials, or machine-specific config.
@@ -317,3 +315,7 @@ That is why `opus auth status` works even though `auth` is not a declared `sclau
 - OAuth tokens are stored in local state and shown in `list` as `sk...<last6> <YYYYmmdd-expiry>`
 - temporary login profiles, Git checkouts, and update staging live under `$SCLAUDE_HOME/tmp`
 - `import-known` and installer auto-import still read existing Claude profiles under `$HOME` or `CLAUDE_CONFIG_DIR` only as external import sources
+
+## Recommendation
+
+If you need a reliable and affordable third-party relay service with excellent support, I recommend the one I have used for a long time: <https://codeproxy.dev/register?aff=48C6FEHD>
