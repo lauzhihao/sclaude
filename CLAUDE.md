@@ -30,16 +30,37 @@ You are a **Senior sclaude Rust Engineer**, responsible for maintaining and exte
   scripts/
     map_project.py     # Project map generator
   src/
-    main.rs            # Entrypoint
+    main.rs            # Binary entrypoint
+    lib.rs             # Library entry shared with bin targets
     cli.rs             # Top-level command parsing
     adapters/
       mod.rs
-      codex/           # Codex-specific account/auth/deploy/usage/ui logic
+      claude/          # Claude-specific account/auth/credentials/paths/repo_sync/ui/usage logic
+        account.rs
+        auth.rs
+        credentials.rs
+        mod.rs
+        paths.rs
+        repo_sync.rs
+        ui.rs
+        usage.rs
+    bin/               # Model-specific launcher binaries
+      haiku.rs
+      opus.rs
+      sonnet.rs
     core/              # Shared policy, storage, state, ui, update logic
+      mod.rs
+      policy.rs
+      state.rs
+      storage.rs
+      ui.rs
+      update.rs
   Cargo.toml
   Cargo.lock
+  rust-toolchain.toml
   README.md
   README.zh-CN.md
+  AGENTS.md
   ARCHITECTURE.md
   install.sh
   install.ps1
@@ -52,21 +73,21 @@ You are a **Senior sclaude Rust Engineer**, responsible for maintaining and exte
 
 ## 3. Repository-Specific Guidelines
 - **Core** (`src/core/`): Keep CLI-agnostic logic here, including state storage, ranking policy, update flow, and shared UI.
-- **Adapter** (`src/adapters/`): Keep CLI-specific behavior isolated from the core. Codex-specific auth paths, login flow, deploy behavior, and live usage refresh belong under `src/adapters/codex/`.
-- **CLI surface** (`src/cli.rs`, `src/main.rs`): Keep command parsing and entry behavior explicit. Backward-compatible aliases should remain intentional and documented.
+- **Adapter** (`src/adapters/`): Keep CLI-specific behavior isolated from the core. Claude-specific auth paths, login flow, account pool sync, and live usage refresh belong under `src/adapters/claude/`.
+- **CLI surface** (`src/cli.rs`, `src/main.rs`, `src/lib.rs`): Keep command parsing and entry behavior explicit. Backward-compatible aliases should remain intentional and documented.
 - **Installers** (`install.sh`, `install.ps1`): Treat as user-facing bootstrap paths. Be conservative with environment mutation and platform-specific behavior.
 
 ## 4. Testing
 - **Rust**: Prefer unit tests close to the implementation, following the existing module-local `#[cfg(test)]` style.
-- **Behavior contract**: Changes affecting account selection, import, deploy, update, or CLI routing should preserve documented behavior unless the user explicitly requests a behavioral change.
+- **Behavior contract**: Changes affecting account selection, import, account pool sync, update, or CLI routing should preserve documented behavior unless the user explicitly requests a behavioral change.
 - **Verification**: When code changes are made, prefer `cargo test` and any targeted command-level verification that matches the touched area.
 
 ## 5. Implementation-First Rule
-- When a user question is related to `sclaude`, its commands, account switching, deploy, update, passthrough behavior, runtime flow, performance, timing, failure modes, or implementation details, you MUST inspect the local implementation first.
+- When a user question is related to `sclaude`, its commands, account switching, account pool sync, update, passthrough behavior, runtime flow, performance, timing, failure modes, or implementation details, you MUST inspect the local implementation first.
 - **Required workflow**:
   1. First determine whether the question is about actual repository behavior or implementation details.
   2. If yes, you MUST read `.project_map` first, then inspect the relevant implementation files before answering.
-  3. Prefer source files under `src/`, especially `src/cli.rs`, `src/core/`, and `src/adapters/codex/`.
+  3. Prefer source files under `src/`, especially `src/cli.rs`, `src/core/`, and `src/adapters/claude/`.
   4. Use `ARCHITECTURE.md` only as secondary background, not as the primary source of truth for runtime behavior.
   5. If the implementation does not clearly specify the answer, explicitly state: `当前代码未明确体现`.
   6. If the issue looks like a regression, anomaly, or implementation mismatch, recommend checking recent commits and the affected code path.
