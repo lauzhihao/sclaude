@@ -1,29 +1,36 @@
 # sclaude Project Map
-> Generated: Mon Apr 20 15:56:55 CST 2026
+> Generated: Wed May 13 16:58:32 CST 2026
 > Strategy: Source Focused (src expanded, target collapsed)
 
 ## Package
 
 - name: sclaude
-- version: 0.1.0
+- version: 0.1.20
 - edition: 2024
 - description: Cross-platform account-aware launcher for Claude Code model entrypoints.
-- dependencies (17): anyhow, base64, chacha20poly1305, chrono, clap, directories, flate2, reqwest, serde, serde_json, self-replace, sha2, tar, tungstenite, unicode-width, uuid, zip
+- dependencies (18): anyhow, base64, chacha20poly1305, chrono, clap, directories, flate2, portable-pty, reqwest, serde, serde_json, self-replace, sha2, tar, tungstenite, unicode-width, uuid, zip
 
 ## Rust Modules
 
-- crate root: cli, lib, main
+- crate root: lib, main
 - adapters: mod
 - adapters::claude: account, auth, credentials, mod, paths, repo_sync, ui, usage
 - bin: haiku, opus, sonnet
+- cli: args, help, launch, mod, repo_sync
 - core: mod, policy, state, storage, ui, update
 
 ## Directory Structure
 ```text
+|-- [D] .claude/  [collapsed: 1 files]
 |-- [D] .github/
 |   -- [D] workflows/
 |       |-- [F] ci.yml
 |       -- [F] release.yml
+|-- [D] backlog/
+|   -- [D] tasks/
+|       |-- [F] task-001.md
+|       |-- [F] task-002.md
+|       -- [F] task-003.md
 |-- [D] scripts/
 |   -- [F] map_project.py
 |-- [D] src/
@@ -42,6 +49,12 @@
 |   |   |-- [F] haiku.rs
 |   |   |-- [F] opus.rs
 |   |   -- [F] sonnet.rs
+|   |-- [D] cli/
+|   |   |-- [F] args.rs
+|   |   |-- [F] help.rs
+|   |   |-- [F] launch.rs
+|   |   |-- [F] mod.rs
+|   |   -- [F] repo_sync.rs
 |   |-- [D] core/
 |   |   |-- [F] mod.rs
 |   |   |-- [F] policy.rs
@@ -49,10 +62,9 @@
 |   |   |-- [F] storage.rs
 |   |   |-- [F] ui.rs
 |   |   -- [F] update.rs
-|   |-- [F] cli.rs
 |   |-- [F] lib.rs
 |   -- [F] main.rs
-|-- [D] target/  [collapsed: 6493 files]
+|-- [D] target/  [collapsed: 3164 files]
 |-- [F] AGENTS.md
 |-- [F] ARCHITECTURE.md
 |-- [F] Cargo.lock
@@ -62,5 +74,6 @@
 |-- [F] install.sh
 |-- [F] README.md
 |-- [F] README.zh-CN.md
--- [F] rust-toolchain.toml
+|-- [F] rust-toolchain.toml
+-- [F] SCODEX_API_OPTIMIZATION_PORTING.md
 ```
