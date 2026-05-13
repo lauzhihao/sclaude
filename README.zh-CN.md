@@ -2,8 +2,6 @@
 
 [English](./README.md) | [简体中文](./README.zh-CN.md)
 
-顺手分享一个我用了很久的第三方中转服务，稳定、便宜、售后也非常赞：<https://codeproxy.dev/register?aff=48C6FEHD>
-
 `sclaude` 是一个基于 Rust 的 Claude Code CLI wrapper，用来做多账号管理、账号导入、加密账号池同步，以及模型固定入口。
 
 这个仓库只包含代码，不包含账号池数据、额度缓存、本地凭据或机器相关配置。
@@ -317,3 +315,7 @@ opus auth status
 - OAuth token 会保存在本地 state 中，`list` 会显示为 `sk...<后6位> <YYYYmmdd过期日>`
 - 临时登录配置、Git checkout、自更新暂存目录都位于 `$SCLAUDE_HOME/tmp`
 - `import-known` 和安装脚本的自动导入仍会读取 `$HOME` 或 `CLAUDE_CONFIG_DIR` 下已有 Claude profile，但它们只作为外部导入来源
+
+## 推荐
+
+如果你需要一个稳定且价格合适、售后又靠谱的第三方中转服务，我推荐自己长期在用的这家：<https://codeproxy.dev/register?aff=48C6FEHD>
